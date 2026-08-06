@@ -1,0 +1,30 @@
+{
+  "videos": {
+    "video_1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_1.mp4?alt=media&token=ea1b33fa-45e8-4b1b-8f58-6d1ff8ea8cde",
+    "video_2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_2.mp4?alt=media&token=9bb8bf02-5c65-4f3e-9e15-aaa2cd15ddd3",
+    "video_3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_3.mp4?alt=media&token=34994bb0-f75b-415c-b22c-c41280829d9e",
+    "video_4": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_4.mp4?alt=media&token=d49a321a-129b-425a-a081-3a9dca0e2047",
+    "video_5": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_5.mp4?alt=media&token=0b9ad6a7-4751-4c90-b6e3-2aad59fd9e7d",
+    "video_6": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_6.mp4?alt=media&token=e13edc44-f6c9-4198-98c7-d65badf4d0f6"
+  },
+  "images": {
+    "v1_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_1_frame_1.jpg?alt=media&token=a3ce6891-61a3-4343-b573-79fbf9ed378f",
+    "v1_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_1_frame_2.jpg?alt=media&token=61523fae-b998-429d-b235-58651d6e1283",
+    "v1_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_1_frame_3.jpg?alt=media&token=2fb38c51-dde2-4b93-9f63-80faa1abb991",
+    "v2_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_2_frame_1.jpg?alt=media&token=d93a51d4-6c8d-48b3-983f-b56fccf54405",
+    "v2_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_2_frame_2.jpg?alt=media&token=eb1fb104-5deb-4cff-be95-3bce46800753",
+    "v2_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_2_frame_3.jpg?alt=media&token=ef94185b-4c6a-4178-8c7f-8eb25d08d05b",
+    "v3_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_3_frame_1.jpg?alt=media&token=e9ef7356-7301-437b-9fda-1f208cc94eec",
+    "v3_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_3_frame_2.jpg?alt=media&token=e4135f43-4068-48bc-8c26-d389573bfb72",
+    "v3_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_3_frame_3.jpg?alt=media&token=c88d8d4a-9f71-4120-94c3-fa6ab688df2e",
+    "v4_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_4_frame_1.jpg?alt=media&token=b5f035c5-7470-4a31-af5a-1fe121d70a00",
+    "v4_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_4_frame_2.jpg?alt=media&token=dc154eb5-a55b-46e9-b863-5aa9fc43033e",
+    "v4_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_4_frame_3.jpg?alt=media&token=22ba6ef2-465f-4365-9fde-89964a12d141",
+    "v5_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_5_frame_1.jpg?alt=media&token=4aa9a10b-41bb-4130-8bfb-973ec21cbf33",
+    "v5_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_5_frame_2.jpg?alt=media&token=87f8a124-d5e5-4c09-8a1d-6558a2582d39",
+    "v5_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_5_frame_3.jpg?alt=media&token=ada99a7e-f60d-47a1-91b4-a064ae319fc4",
+    "v6_f1": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_6_frame_1.jpg?alt=media&token=724882f8-8e60-469e-a0c7-4d00f6998d14",
+    "v6_f2": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_6_frame_2.jpg?alt=media&token=fa86fd56-ca8e-486e-b9e4-302e4a9b7d7c",
+    "v6_f3": "https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/images%2Fvideo_6_frame_3.jpg?alt=media&token=00eb5833-dc65-4e27-bae7-3c46a5994078"
+  }
+}
