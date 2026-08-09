@@ -13,6 +13,7 @@ import {
   Text,
   ScrollView,
   Share,
+  Alert,
 } from 'react-native';
 import { useRouter, useLocalSearchParams, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,9 +39,28 @@ import {
   MapPin,
   X,
   ArrowLeft,
+  ChevronDown,
+  Check,
+  GitCompare,
 } from 'lucide-react-native';
 import { formatTime } from '@/utils/time';
 import { FLEA_MARKET_CATEGORIES, PRODUCER_CATEGORIES, RENTAL_SUB_CATEGORIES } from './create';
+import CategoryBadge from '@/components/category-badge';
+
+const USER_LATITUDE = 41.0082;
+const USER_LONGITUDE = 28.9784;
+
+const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; 
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
 
 type FilterType = 'all' | 'auction' | 'offer' | 'fixed' | 'rent';
 
@@ -112,16 +132,93 @@ export default function AuctionsScreen() {
   // Display height calculation for each Reel slide
   const displayHeight = windowHeight - 64 - 60 - insets.top;
 
-  const { listings, decrementTimers, toggleLike, addToCart } = useAppStore();
+  const { listings, decrementTimers, toggleLike, addToCart, setCartModalVisible, setCheckoutStep, compareList, removeFromCompareList, clearCompareList } = useAppStore();
+  const [compareModalVisible, setCompareModalVisible] = useState(false);
+
+
+  const getSellerBadges = (item: Listing) => {
+    const nameLower = item.sellerName.toLowerCase();
+    const badges = [];
+
+    const isRealEstate = item.isRealEstate || item.category.includes('Emlak') || nameLower.includes('emlak');
+    const isVehicle = item.isVehicle || nameLower.includes('galeri') || (
+      item.category.includes('Otomobil') ||
+      item.category.includes('Motosiklet') ||
+      item.category.includes('Karavan') ||
+      item.category.includes('Kamyon') ||
+      item.category.includes('Traktör') ||
+      item.category.includes('İş makineleri')
+    );
+    const isRent = item.type === 'rent';
+    const isProducer = ['Doğal Gıda', 'El Emeği & Sanat', '🍯 Organik Bal & Arı Ürünleri', '🫒 Zeytinyağı & Doğal Kahvaltılık', '🥫 Ev Yapımı Konserve, Reçel & Sos', '🌾 Kuru Gıda, Bakliyat & Şifalı Otlar', '🧶 El Emeği Örgü & Ev Tekstili', '🪵 Ahşap & Doğal Malzeme Tasarımları', '🕯️ Doğal Kozmetik, Sabun & Mum', '💍 El Yapımı Takı & Aksesuar', '♻️ Bahçe, Fide, Tohum & Bitki'].includes(item.category) || nameLower.includes('üretici') || nameLower.includes('bahçe') || nameLower.includes('atölye') || nameLower.includes('üretim') || nameLower.includes('bal') || nameLower.includes('zeytin');
+    const isMega = nameLower.includes('mega') || nameLower.includes('holding');
+
+    if (isRealEstate || isMega) {
+      badges.push({
+        label: 'EMLAK',
+        name: '🏠 Kurumsal Emlak Yetkilisi',
+        description: 'Bu üye Bakanlık onaylı Taşınmaz Ticareti Yetki Belgesine ve EİDS e-Devlet ilan doğrulama entegrasyonuna sahip kurumsal bir emlak ofisidir.',
+        image: require('@/assets/images/badge_emlak.png'),
+      });
+    }
+    if (isVehicle || isMega) {
+      badges.push({
+        label: 'GALERİ',
+        name: '🚗 Kurumsal Oto Galeri Üyesi',
+        description: 'Bu üye Bakanlık onaylı İkinci El Motorlu Kara Taşıtı Ticareti Yetki Belgesine, Seviye 5 Mesleki Yeterlilik belgesine sahip kurumsal bir oto galerisidir.',
+        image: require('@/assets/images/badge_galeri.png'),
+      });
+    }
+    if (isRent || isMega) {
+      badges.push({
+        label: 'RENT A CAR',
+        name: '🔑 Kurumsal Oto Kiralama (Rent a Car)',
+        description: 'Bu üye resmi oto kiralama ruhsatına, NACE kodu onaylı vergi levhasına ve e-Devlet entegrasyonuna sahip kurumsal araç kiralama firmasıdır.',
+        image: require('@/assets/images/badge_rentacar.png'),
+      });
+    }
+    if (isProducer || isMega) {
+      badges.push({
+        label: 'ÜRETİCİ',
+        name: '🍯 Onaylı Yerel Üretici',
+        description: 'Bu üye yerel, el yapımı veya doğal tarım ürünleri üreten, doğrulanmış üretim/gıda uygunluk raporuna sahip yerel üreticidir.',
+        image: require('@/assets/images/badge_dogrulanmis.png'),
+      });
+    }
+    
+    if (badges.length === 0 && item.sellerVerified) {
+      badges.push({
+        label: 'KURUMSAL',
+        name: '🏢 Kurumsal Üye',
+        description: 'Bu üye resmi belgelerini sunmuş ve doğrulanmış kurumsal bir firmadır.',
+        image: require('@/assets/images/badge_kurumsal.png'),
+      });
+    }
+
+    return badges;
+  };
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<FilterType>('all');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedCity, setSelectedCity] = useState<string | null>(null);
+  const [cityPickerVisible, setCityPickerVisible] = useState(false);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [sortBy, setSortBy] = useState<'default' | 'price_asc' | 'price_desc'>('default');
+
+  // Vasıta (Vehicle) Specific Filter States
+  const [filterMinKm, setFilterMinKm] = useState('');
+  const [filterMaxKm, setFilterMaxKm] = useState('');
+  const [filterMinYear, setFilterMinYear] = useState('');
+  const [filterMaxYear, setFilterMaxYear] = useState('');
+  const [filterTransmission, setFilterTransmission] = useState<'all' | 'Manuel' | 'Otomatik'>('all');
+
+  // Emlak (Real Estate) Specific Filter States
+  const [filterMinSqm, setFilterMinSqm] = useState('');
+  const [filterMaxSqm, setFilterMaxSqm] = useState('');
+  const [filterRooms, setFilterRooms] = useState<string[]>([]);
 
   // View Mode: 'grid' (list of products) or 'reels' (fullscreen player)
   const [viewMode, setViewMode] = useState<'grid' | 'reels'>('grid');
@@ -129,6 +226,8 @@ export default function AuctionsScreen() {
   const [filtersVisible, setFiltersVisible] = useState(false);
   const [activeItemIndex, setActiveItemIndex] = useState(0);
   const reelsFlatListRef = useRef<FlatList>(null);
+  const [reelsSearchQuery, setReelsSearchQuery] = useState('');
+  const [reelsSearchDividerIndex, setReelsSearchDividerIndex] = useState<number | null>(null);
 
   // Sync timers
   useEffect(() => {
@@ -157,9 +256,14 @@ export default function AuctionsScreen() {
     setViewMode('grid');
   }, [category]);
 
-  // Filter and Sort Video Products
+  // Filter and Sort Products
   const filteredReels = listings
-    .filter((item) => !!item.videoUrl)
+    .filter((item) => {
+      // If we are in category mode (i.e. category or type exists), show all matching items, not just video ones!
+      // Otherwise (General Reels Feed), only show items that have a videoUrl.
+      if (!category && !type && !item.videoUrl) return false;
+      return true;
+    })
     .filter((item) => {
       const matchesSearch = searchQuery
         ? item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -171,19 +275,34 @@ export default function AuctionsScreen() {
 
       let matchesCategory = true;
       if (category === 'Bit Pazarı') {
-        matchesCategory = item.type !== 'auction';
-        if (selectedCategory && selectedCategory !== 'Bit Pazarı') {
-          matchesCategory = matchesCategory && (item.category === selectedCategory || matchesSubCategory(item, selectedCategory));
+        // Bit Pazarı: exclude auctions, rentals, real estate, and vehicle listings
+        if (item.type === 'auction' || item.type === 'rent') matchesCategory = false;
+        else if (item.isRealEstate || item.isVehicle) matchesCategory = false;
+        else if (isSatKiralaCategory(item)) matchesCategory = false;
+        else {
+          // Must be a flea market compatible category
+          const isFleaItem = FLEA_MARKET_CATEGORIES.some(fc => matchesSubCategory(item, fc)) ||
+            ['Giyim & Aksesuar', 'Elektronik', 'Ev & Yaşam', 'Antika & Koleksiyon', 'Koleksiyon & Antika', 'Kitap & Hobi', 'Diğer', 'Genel'].includes(item.category);
+          matchesCategory = isFleaItem;
+        }
+        if (matchesCategory && selectedCategory && selectedCategory !== 'Bit Pazarı') {
+          matchesCategory = item.category === selectedCategory || matchesSubCategory(item, selectedCategory);
         }
       } else if (category === 'Üreticiden Tüketiciye') {
-        const isProducerProduct =
-          item.verifiedProduct === true ||
-          ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
-          PRODUCER_CATEGORIES.includes(item.category) ||
-          item.category === '🔍 Diğer';
-        matchesCategory = item.type !== 'auction' && isProducerProduct;
-        if (selectedCategory && selectedCategory !== 'Üreticiden Tüketiciye') {
-          matchesCategory = matchesCategory && (item.category === selectedCategory || matchesSubCategory(item, selectedCategory));
+        // Üreticiden Tüketiciye: exclude auctions, rentals, real estate, and vehicle listings
+        if (item.type === 'auction' || item.type === 'rent') matchesCategory = false;
+        else if (item.isRealEstate || item.isVehicle) matchesCategory = false;
+        else if (isSatKiralaCategory(item)) matchesCategory = false;
+        else {
+          const isProducerProduct =
+            item.verifiedProduct === true ||
+            ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
+            PRODUCER_CATEGORIES.includes(item.category) ||
+            item.category === '🔍 Diğer';
+          matchesCategory = isProducerProduct;
+        }
+        if (matchesCategory && selectedCategory && selectedCategory !== 'Üreticiden Tüketiciye') {
+          matchesCategory = item.category === selectedCategory || matchesSubCategory(item, selectedCategory);
         }
       } else if (category === 'Sat / Kirala') {
         matchesCategory = isSatKiralaCategory(item);
@@ -192,14 +311,26 @@ export default function AuctionsScreen() {
         }
       } else {
         if (selectedCategory === 'Bit Pazarı') {
-          matchesCategory = item.type !== 'auction';
+          if (item.type === 'auction' || item.type === 'rent') matchesCategory = false;
+          else if (item.isRealEstate || item.isVehicle) matchesCategory = false;
+          else if (isSatKiralaCategory(item)) matchesCategory = false;
+          else {
+            const isFleaItem = FLEA_MARKET_CATEGORIES.some(fc => matchesSubCategory(item, fc)) ||
+              ['Giyim & Aksesuar', 'Elektronik', 'Ev & Yaşam', 'Antika & Koleksiyon', 'Koleksiyon & Antika', 'Kitap & Hobi', 'Diğer', 'Genel'].includes(item.category);
+            matchesCategory = isFleaItem;
+          }
         } else if (selectedCategory === 'Üreticiden Tüketiciye') {
-          const isProducerProduct =
-            item.verifiedProduct === true ||
-            ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
-            PRODUCER_CATEGORIES.includes(item.category) ||
-            item.category === '🔍 Diğer';
-          matchesCategory = item.type !== 'auction' && isProducerProduct;
+          if (item.type === 'auction' || item.type === 'rent') matchesCategory = false;
+          else if (item.isRealEstate || item.isVehicle) matchesCategory = false;
+          else if (isSatKiralaCategory(item)) matchesCategory = false;
+          else {
+            const isProducerProduct =
+              item.verifiedProduct === true ||
+              ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
+              PRODUCER_CATEGORIES.includes(item.category) ||
+              item.category === '🔍 Diğer';
+            matchesCategory = isProducerProduct;
+          }
         } else if (selectedCategory === 'Sat / Kirala') {
           matchesCategory = isSatKiralaCategory(item);
         } else if (selectedCategory) {
@@ -212,7 +343,31 @@ export default function AuctionsScreen() {
       const matchesMinPrice = minPrice ? item.price >= parseFloat(minPrice) : true;
       const matchesMaxPrice = maxPrice ? item.price <= parseFloat(maxPrice) : true;
 
-      return matchesSearch && matchesFilter && matchesCategory && matchesCity && matchesMinPrice && matchesMaxPrice;
+      // Category Specific filters: Vasıta (Otomobil)
+      let matchesVehicle = true;
+      if (item.isVehicle || (item.category && item.category.includes('Otomobil'))) {
+        const itemKm = item.km || 0;
+        const itemYear = item.year || 0;
+        
+        if (filterMinKm && itemKm < parseInt(filterMinKm)) matchesVehicle = false;
+        if (filterMaxKm && itemKm > parseInt(filterMaxKm)) matchesVehicle = false;
+        if (filterMinYear && itemYear < parseInt(filterMinYear)) matchesVehicle = false;
+        if (filterMaxYear && itemYear > parseInt(filterMaxYear)) matchesVehicle = false;
+        if (filterTransmission !== 'all' && item.transmission !== filterTransmission) matchesVehicle = false;
+      }
+
+      // Category Specific filters: Emlak
+      let matchesRealEstate = true;
+      if (item.isRealEstate || (item.category && item.category.includes('Emlak'))) {
+        const itemSqm = item.sqm || 0;
+        const itemRooms = item.rooms || '';
+        
+        if (filterMinSqm && itemSqm < parseInt(filterMinSqm)) matchesRealEstate = false;
+        if (filterMaxSqm && itemSqm > parseInt(filterMaxSqm)) matchesRealEstate = false;
+        if (filterRooms.length > 0 && !filterRooms.includes(itemRooms)) matchesRealEstate = false;
+      }
+
+      return matchesSearch && matchesFilter && matchesCategory && matchesCity && matchesMinPrice && matchesMaxPrice && matchesVehicle && matchesRealEstate;
     });
 
   // Apply sorting
@@ -223,6 +378,46 @@ export default function AuctionsScreen() {
   } else {
     // Default: Sort by newest first
     filteredReels.sort((a, b) => b.id.localeCompare(a.id));
+  }
+
+  // Smart Reels search: separate exact matches from similar items
+  const reelsVideoItems = filteredReels.filter(item => !!item.videoUrl);
+  let smartReelsItems: Listing[] = reelsVideoItems;
+  let computedDividerIndex: number | null = null;
+
+  if (reelsSearchQuery.trim()) {
+    const query = reelsSearchQuery.trim().toLowerCase();
+    const exactMatches: Listing[] = [];
+    const similarItems: Listing[] = [];
+
+    reelsVideoItems.forEach(item => {
+      const matchesTitle = item.title.toLowerCase().includes(query);
+      const matchesDesc = item.description.toLowerCase().includes(query);
+      const matchesCat = item.category.toLowerCase().includes(query);
+      if (matchesTitle || matchesDesc || matchesCat) {
+        exactMatches.push(item);
+      }
+    });
+
+    // Get the parent category of exact match items, then find similar items
+    const matchedCategories = new Set(exactMatches.map(item => item.category));
+    reelsVideoItems.forEach(item => {
+      if (!exactMatches.includes(item)) {
+        if (matchedCategories.has(item.category)) {
+          similarItems.push(item);
+        }
+      }
+    });
+
+    // Remaining items that are neither exact matches nor similar
+    const remaining = reelsVideoItems.filter(item => !exactMatches.includes(item) && !similarItems.includes(item));
+
+    if (exactMatches.length > 0) {
+      smartReelsItems = [...exactMatches, ...similarItems, ...remaining];
+      computedDividerIndex = exactMatches.length;
+    } else {
+      smartReelsItems = reelsVideoItems;
+    }
   }
 
   // Staggered heights for masonry grid cards
@@ -265,6 +460,14 @@ export default function AuctionsScreen() {
     setMaxPrice('');
     setSortBy('default');
     setSearchQuery('');
+    setFilterMinKm('');
+    setFilterMaxKm('');
+    setFilterMinYear('');
+    setFilterMaxYear('');
+    setFilterTransmission('all');
+    setFilterMinSqm('');
+    setFilterMaxSqm('');
+    setFilterRooms([]);
     setFiltersVisible(false);
     setActiveItemIndex(0);
     setTimeout(() => {
@@ -385,7 +588,13 @@ export default function AuctionsScreen() {
 
           <Pressable
             style={[styles.iconButton, styles.gavelButton]}
-            onPress={() => handleAddToCart(item)}
+            onPress={() => {
+              if (item.type === 'fixed') {
+                addToCart(item.id);
+              }
+              setCheckoutStep('cart');
+              setCartModalVisible(true);
+            }}
           >
             <ShoppingCart size={26} color="#FF6B00" />
           </Pressable>
@@ -405,13 +614,30 @@ export default function AuctionsScreen() {
         </View>
 
         {/* Bottom Details Overlay */}
-        <View style={styles.bottomOverlay}>
+        <View style={[styles.bottomOverlay, { paddingBottom: Math.max(28, insets.bottom + 16) }]}>
           <View style={styles.sellerRow}>
             <Image source={{ uri: item.sellerAvatar }} style={styles.sellerAvatar} />
             <View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <ThemedText style={styles.sellerName}>{item.sellerName}</ThemedText>
-                {item.sellerVerified && <ShieldCheck size={14} color="#FF6B00" />}
+                {(() => {
+                  if (!item.sellerVerified) return null;
+                  const badges = getSellerBadges(item);
+                  return badges.map((badge, idx) => (
+                    <Pressable
+                      key={idx}
+                      onPress={() => {
+                        Alert.alert(badge.name, badge.description, [{ text: 'Tamam' }]);
+                      }}
+                      style={{ marginLeft: 2 }}
+                    >
+                      <Image
+                        source={badge.image}
+                        style={{ width: 16, height: 18, resizeMode: 'contain' }}
+                      />
+                    </Pressable>
+                  ));
+                })()}
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <ThemedText style={styles.sellerScore}>Güven Skoru: {item.sellerTrustScore}/10</ThemedText>
@@ -430,6 +656,7 @@ export default function AuctionsScreen() {
             )}
           </View>
 
+          <CategoryBadge item={item} style={{ marginBottom: 6, alignSelf: 'flex-start' }} />
           <ThemedText style={styles.listingTitle}>{item.title}</ThemedText>
           <ThemedText style={styles.listingDesc} numberOfLines={2}>
             {item.description}
@@ -450,15 +677,38 @@ export default function AuctionsScreen() {
               </ThemedText>
             </View>
 
-            <Pressable
-              style={styles.ctaButton}
-              onPress={() => {
-                router.push(`/product/${item.id}`);
-              }}
-            >
-              <ThemedText style={styles.ctaButtonText}>Detayları Gör</ThemedText>
-              <ChevronRight size={16} color="#0B132B" />
-            </Pressable>
+            {item.type === 'fixed' ? (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable
+                  style={[styles.reelsAddToCartBtn, { backgroundColor: '#FF5500' }]}
+                  onPress={() => handleAddToCart(item)}
+                >
+                  <Text style={styles.reelsAddToCartBtnText}>Sepete Ekle</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                  onPress={() => {
+                    addToCart(item.id);
+                    setCheckoutStep('cart');
+                    setCartModalVisible(true);
+                  }}
+                >
+                  <Text style={styles.ctaButtonText}>Hemen Al</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                style={styles.ctaButton}
+                onPress={() => {
+                  router.push(`/product/${item.id}`);
+                }}
+              >
+                <ThemedText style={styles.ctaButtonText}>
+                  {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
+                </ThemedText>
+                <ChevronRight size={16} color="#0B132B" />
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -522,19 +772,100 @@ export default function AuctionsScreen() {
     );
   };
 
+  const renderListItem = (item: Listing) => {
+    const isDark = scheme === 'dark';
+    return (
+      <Pressable
+        key={`list_item_${item.id}`}
+        style={[
+          styles.listItemContainer,
+          {
+            backgroundColor: theme.backgroundElement,
+            borderColor: theme.backgroundSelected,
+          }
+        ]}
+        onPress={() => {
+          router.push(`/product/${item.id}`);
+        }}
+      >
+        <Image
+          source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+          style={styles.listItemImage}
+        />
+        
+        <View style={styles.listItemInfo}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 4 }}>
+            <Text style={[styles.listItemTitle, { color: theme.text }]} numberOfLines={2}>
+              {item.title}
+            </Text>
+            {item.verifiedProduct && (
+              <View style={[styles.verifiedBadgeTiny, { backgroundColor: isDark ? 'rgba(52, 211, 153, 0.15)' : 'rgba(5, 150, 105, 0.08)' }]}>
+                <ShieldCheck size={11} color={isDark ? '#34D399' : '#059669'} />
+                <Text style={[styles.verifiedBadgeTextTiny, { color: isDark ? '#34D399' : '#059669' }]}>Onaylı</Text>
+              </View>
+            )}
+          </View>
+          
+          <CategoryBadge item={item} style={{ marginVertical: 3 }} />
+
+          <Text style={[styles.listItemPrice, { color: isDark ? theme.gold : theme.goldAccent }]}>
+            {item.price.toLocaleString('tr-TR')} TL
+            {item.type === 'rent' && ` / ${item.rentPeriod || 'Günlük'}`}
+          </Text>
+
+          <View style={styles.listItemFooter}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <MapPin size={12} color={theme.textSecondary} />
+              <Text style={{ color: theme.textSecondary, fontSize: 11, fontWeight: '500' }}>
+                {item.city}
+              </Text>
+            </View>
+            
+            <View style={[
+              styles.typeBadge,
+              {
+                backgroundColor: item.type === 'auction'
+                  ? 'rgba(255, 107, 0, 0.12)'
+                  : item.type === 'offer'
+                  ? 'rgba(147, 51, 234, 0.12)'
+                  : item.type === 'rent'
+                  ? 'rgba(139, 92, 246, 0.12)'
+                  : 'rgba(59, 130, 246, 0.12)',
+                borderColor: item.type === 'auction'
+                  ? 'rgba(255, 107, 0, 0.25)'
+                  : item.type === 'offer'
+                  ? 'rgba(147, 51, 234, 0.25)'
+                  : item.type === 'rent'
+                  ? 'rgba(139, 92, 246, 0.25)'
+                  : 'rgba(59, 130, 246, 0.25)'
+              }
+            ]}>
+              <Text style={[
+                styles.typeBadgeText,
+                {
+                  color: item.type === 'auction'
+                    ? theme.gold
+                    : item.type === 'offer'
+                    ? '#A855F7'
+                    : item.type === 'rent'
+                    ? '#8B5CF6'
+                    : '#3B82F6'
+                }
+              ]}>
+                {item.type === 'auction' ? 'Mezat' : item.type === 'offer' ? 'Teklifli' : item.type === 'rent' ? 'Kiralık' : 'Sabit'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
+
   // Fullscreen swiping Reels Mode Layout
   if (viewMode === 'reels') {
     return (
       <ThemedView style={[styles.container, { backgroundColor: '#000000', paddingTop: 0 }]}>
-        {/* Transparent Header Overlay with Back Button */}
-        <View style={[styles.backToGridHeader, { top: Math.max(12, insets.top) }]}>
-          <Pressable style={styles.backToGridBtn} onPress={() => setViewMode('grid')}>
-            <ArrowLeft size={20} color="#F8FAFC" />
-            <Text style={styles.backToGridText}>Liste Görümüne Dön</Text>
-          </Pressable>
-        </View>
-
-        {filteredReels.length === 0 ? (
+        {smartReelsItems.length === 0 ? (
           <View style={styles.reelsEmptyContainer}>
             <SlidersHorizontal size={48} color="#FF6B00" style={{ marginBottom: 16 }} />
             <Text style={styles.reelsEmptyText}>Uyumlu Reels bulunamadı.</Text>
@@ -543,27 +874,68 @@ export default function AuctionsScreen() {
             </Pressable>
           </View>
         ) : (
-          <FlatList
-            ref={reelsFlatListRef}
-            data={filteredReels}
-            renderItem={renderFeedItem}
-            keyExtractor={(item) => `reel_feed_${item.id}`}
-            pagingEnabled
-            showsVerticalScrollIndicator={false}
-            onViewableItemsChanged={onViewableItemsChanged}
-            viewabilityConfig={viewabilityConfig}
-            initialScrollIndex={activeItemIndex}
-            getItemLayout={(data, index) => ({
-              length: displayHeight,
-              offset: displayHeight * index,
-              index,
-            })}
-            windowSize={3}
-            maxToRenderPerBatch={1}
-            initialNumToRender={1}
-            removeClippedSubviews={Platform.OS === 'android'}
-          />
+          <View style={{ height: displayHeight, width: windowWidth }}>
+            <FlatList
+              ref={reelsFlatListRef}
+              data={smartReelsItems}
+              renderItem={renderFeedItem}
+              keyExtractor={(item) => `reel_feed_${item.id}`}
+              pagingEnabled
+              showsVerticalScrollIndicator={false}
+              onViewableItemsChanged={onViewableItemsChanged}
+              viewabilityConfig={viewabilityConfig}
+              initialScrollIndex={activeItemIndex < smartReelsItems.length ? activeItemIndex : 0}
+              getItemLayout={(data, index) => ({
+                length: displayHeight,
+                offset: displayHeight * index,
+                index,
+              })}
+              windowSize={3}
+              maxToRenderPerBatch={1}
+              initialNumToRender={1}
+              removeClippedSubviews={Platform.OS === 'android'}
+            />
+          </View>
         )}
+
+        {/* Zarif Arama Uyarısı */}
+        {reelsSearchQuery.trim() !== '' && computedDividerIndex !== null && activeItemIndex >= computedDividerIndex && (
+          <View style={[styles.reelsWarningBanner, { top: Math.max(12, insets.top) + 60 }]}>
+            <Text style={styles.reelsWarningText}>🔍 Aramanızla eşleşen ürünler bitti, benzer ürünler gösterilmektedir.</Text>
+          </View>
+        )}
+
+        {/* Transparent Header Overlay with Back Button, Search, and Filter */}
+        <View style={[styles.reelsHeaderContainer, { top: Math.max(12, insets.top), zIndex: 9999 }]}>
+          <Pressable style={styles.reelsHeaderIconBtn} onPress={() => setViewMode('grid')}>
+            <ArrowLeft size={22} color="#F8FAFC" />
+          </Pressable>
+          
+          <View style={styles.reelsSearchInputWrapper}>
+            <Search size={16} color="rgba(248, 250, 252, 0.6)" style={styles.reelsSearchIcon} />
+            <TextInput
+              style={styles.reelsSearchInput}
+              placeholder="Reels'da ara..."
+              placeholderTextColor="rgba(248, 250, 252, 0.5)"
+              value={reelsSearchQuery}
+              onChangeText={(text) => {
+                setReelsSearchQuery(text);
+                setActiveItemIndex(0);
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {reelsSearchQuery ? (
+              <Pressable onPress={() => { setReelsSearchQuery(''); setActiveItemIndex(0); }}>
+                <X size={16} color="#F8FAFC" />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <Pressable style={styles.reelsHeaderIconBtn} onPress={() => setFiltersVisible(true)}>
+            <SlidersHorizontal size={20} color="#F8FAFC" />
+          </Pressable>
+        </View>
       </ThemedView>
     );
   }
@@ -601,27 +973,57 @@ export default function AuctionsScreen() {
 
       {/* Dynamic Filter Badges */}
       <View style={styles.filterBadgesContainer}>
-        {[
-          { id: 'all', label: 'Tümü' },
-          { id: 'auction', label: 'Mezat' },
-          { id: 'offer', label: 'Teklifliler' },
-          { id: 'fixed', label: 'Sabit' },
-          { id: 'rent', label: 'Kiralık' }
-        ].map((t) => (
-          <Pressable
-            key={t.id}
-            style={[
-              styles.filterChip,
-              { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-              selectedFilter === t.id && styles.activeFilterChip
-            ]}
-            onPress={() => setSelectedFilter(t.id as FilterType)}
-          >
-            <ThemedText style={[styles.filterChipText, selectedFilter === t.id && styles.activeFilterChipText]}>
-              {t.label}
-            </ThemedText>
-          </Pressable>
-        ))}
+        {category ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 4 }}>
+            {[
+              { id: 'all', label: 'Tümü', value: null },
+              ...(category === 'Bit Pazarı'
+                ? FLEA_MARKET_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
+                : category === 'Üreticiden Tüketiciye'
+                ? PRODUCER_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
+                : RENTAL_SUB_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat })))
+            ].map((t) => {
+              const isSelected = selectedCategory === t.value || (t.value === null && (selectedCategory === null || selectedCategory === category));
+              return (
+                <Pressable
+                  key={t.id}
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected, flex: 0, paddingHorizontal: 16 },
+                    isSelected && styles.activeFilterChip
+                  ]}
+                  onPress={() => setSelectedCategory(t.value)}
+                >
+                  <ThemedText style={[styles.filterChipText, isSelected && styles.activeFilterChipText]}>
+                    {t.label}
+                  </ThemedText>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          [
+            { id: 'all', label: 'Tümü' },
+            { id: 'auction', label: 'Mezat' },
+            { id: 'offer', label: 'Teklifliler' },
+            { id: 'fixed', label: 'Sabit' },
+            { id: 'rent', label: 'Kiralık' }
+          ].map((t) => (
+            <Pressable
+              key={t.id}
+              style={[
+                styles.filterChip,
+                { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                selectedFilter === t.id && styles.activeFilterChip
+              ]}
+              onPress={() => setSelectedFilter(t.id as FilterType)}
+            >
+              <ThemedText style={[styles.filterChipText, selectedFilter === t.id && styles.activeFilterChipText]}>
+                {t.label}
+              </ThemedText>
+            </Pressable>
+          ))
+        )}
       </View>
 
       {/* Products Grid List */}
@@ -638,11 +1040,17 @@ export default function AuctionsScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={[styles.gridListContent, { paddingBottom: 100 }]}
         >
-          <View style={styles.masonryGrid}>
-            <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
-            <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
-            <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
-          </View>
+          {category || type ? (
+            <View style={{ gap: 12, paddingHorizontal: 4 }}>
+              {filteredReels.map(renderListItem)}
+            </View>
+          ) : (
+            <View style={styles.masonryGrid}>
+              <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
+              <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
+              <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -735,38 +1143,163 @@ export default function AuctionsScreen() {
                 </View>
               </View>
 
+              {/* Kategoriye Özel Filtreler: Vasıta */}
+              {(category === 'Sat / Kirala' || selectedCategory === '🚗 Otomobil' || selectedCategory === 'Araçlar (Otomobil)') && (
+                <View style={{ gap: 16 }}>
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Kilometre Aralığı</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min KM"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMinKm}
+                        onChangeText={setFilterMinKm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks KM"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMaxKm}
+                        onChangeText={setFilterMaxKm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Model Yılı Aralığı</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min Yıl"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMinYear}
+                        onChangeText={setFilterMinYear}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks Yıl"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMaxYear}
+                        onChangeText={setFilterMaxYear}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Vites Tipi</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      {[
+                        { id: 'all', label: 'Tümü' },
+                        { id: 'Manuel', label: 'Manuel' },
+                        { id: 'Otomatik', label: 'Otomatik' }
+                      ].map((v) => (
+                        <Pressable
+                          key={v.id}
+                          style={[
+                            styles.filterBadge,
+                            { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                            filterTransmission === v.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                          ]}
+                          onPress={() => setFilterTransmission(v.id as any)}
+                        >
+                          <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, filterTransmission === v.id && { color: theme.gold, fontWeight: '700' }]}>
+                            {v.label}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Kategoriye Özel Filtreler: Emlak */}
+              {(category === 'Sat / Kirala' || selectedCategory === '🏠 Emlak') && (
+                <View style={{ gap: 16 }}>
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Metrekare (m²)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min m²"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMinSqm}
+                        onChangeText={setFilterMinSqm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks m²"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={filterMaxSqm}
+                        onChangeText={setFilterMaxSqm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Oda Sayısı</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {['1+1', '2+1', '3+1', '4+1+'].map((r) => {
+                        const isSelected = filterRooms.includes(r);
+                        return (
+                          <Pressable
+                            key={r}
+                            style={[
+                              styles.filterBadge,
+                              { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                              isSelected && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                            ]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setFilterRooms(prev => prev.filter(x => x !== r));
+                              } else {
+                                setFilterRooms(prev => [...prev, r]);
+                              }
+                            }}
+                          >
+                            <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, isSelected && { color: theme.gold, fontWeight: '700' }]}>
+                              {r}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </View>
+              )}
+
               {/* Şehir Seçimi */}
               <View style={styles.filterSection}>
                 <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Şehir</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-                  <Pressable
-                    style={[
-                      styles.filterBadge,
-                      { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                      selectedCity === null && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
-                    ]}
-                    onPress={() => setSelectedCity(null)}
-                  >
-                    <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, selectedCity === null && { color: theme.gold, fontWeight: '700' }]}>
-                      Tüm Türkiye
-                    </Text>
-                  </Pressable>
-                  {['İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => (
-                    <Pressable
-                      key={c}
-                      style={[
-                        styles.filterBadge,
-                        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        selectedCity === c && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
-                      ]}
-                      onPress={() => setSelectedCity(c)}
-                    >
-                      <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, selectedCity === c && { color: theme.gold, fontWeight: '700' }]}>
-                        {c}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                <Pressable
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    backgroundColor: theme.backgroundElement,
+                    borderColor: theme.backgroundSelected,
+                    borderWidth: 1,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    marginTop: 4,
+                  }}
+                  onPress={() => setCityPickerVisible(true)}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>
+                    {selectedCity || 'Tüm Türkiye'}
+                  </Text>
+                  <ChevronDown size={18} color={theme.textSecondary} />
+                </Pressable>
               </View>
 
               {/* Fiyat Aralığı */}
@@ -835,6 +1368,296 @@ export default function AuctionsScreen() {
                 <Text style={{ color: '#070C19', fontWeight: '800' }}>Filtreleri Uygula</Text>
               </Pressable>
             </View>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* City Picker Modal */}
+      <Modal
+        visible={cityPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCityPickerVisible(false)}
+      >
+        <Pressable 
+          style={styles.modalBackdrop} 
+          onPress={() => setCityPickerVisible(false)}
+        >
+          <ThemedView 
+            type="backgroundElement" 
+            style={{
+              width: '90%',
+              maxWidth: 360,
+              borderRadius: 16,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: theme.backgroundSelected,
+            }}
+          >
+            <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
+              Şehir Seçin
+            </ThemedText>
+            <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+              {['Tüm Türkiye', 'İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => {
+                const isSelected = (c === 'Tüm Türkiye' && selectedCity === null) || selectedCity === c;
+                return (
+                  <Pressable
+                    key={c}
+                    style={{
+                      paddingVertical: 12,
+                      paddingHorizontal: 16,
+                      borderRadius: 8,
+                      backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                    onPress={() => {
+                      setSelectedCity(c === 'Tüm Türkiye' ? null : c);
+                      setCityPickerVisible(false);
+                    }}
+                  >
+                    <Text style={{ 
+                      color: isSelected ? theme.gold : theme.text,
+                      fontWeight: isSelected ? 'bold' : 'normal',
+                      fontSize: 14,
+                    }}>
+                      {c}
+                    </Text>
+                    {isSelected && <Check size={16} color={theme.gold} />}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </ThemedView>
+        </Pressable>
+      </Modal>
+
+      {/* FLOATING COMPARE BUTTON */}
+      {compareList.length > 0 && (
+        <Pressable
+          style={{
+            position: 'absolute',
+            bottom: 30, 
+            right: 16,
+            backgroundColor: '#FF5500',
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: 24,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 5,
+            elevation: 8,
+            zIndex: 9999,
+          }}
+          onPress={() => setCompareModalVisible(true)}
+        >
+          <GitCompare size={16} color="#FFFFFF" />
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
+            Karşılaştır ({compareList.length})
+          </Text>
+        </Pressable>
+      )}
+
+      {/* GORGEOUS LISTING COMPARISON MODAL */}
+      <Modal
+        visible={compareModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCompareModalVisible(false)}
+      >
+        <View style={[styles.modalBackdrop, { justifyContent: 'center' }]}>
+          <ThemedView type="backgroundElement" style={{ width: '95%', height: '85%', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: theme.gold }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <GitCompare size={20} color={theme.gold} />
+                <Text style={{ color: theme.text, fontSize: 16, fontWeight: 'bold' }}>İlan Karşılaştırma</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <Pressable onPress={() => { clearCompareList(); setCompareModalVisible(false); }}>
+                  <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: 'bold' }}>Temizle</Text>
+                </Pressable>
+                <Pressable style={{ padding: 4 }} onPress={() => setCompareModalVisible(false)}>
+                  <X size={20} color={theme.text} />
+                </Pressable>
+              </View>
+            </View>
+
+            {compareList.length === 0 ? (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+                <GitCompare size={48} color={theme.textSecondary} style={{ marginBottom: 16, opacity: 0.5 }} />
+                <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center' }}>
+                  Karşılaştırılacak ilan bulunamadı. Lütfen ürün detay sayfalarından karşılaştırma listesine ilan ekleyin.
+                </Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+                {/* Horizontal scroll containing the columns */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ flexDirection: 'row' }}>
+                  {/* Features Column Label */}
+                  <View style={{ width: 100, borderRightWidth: 1, borderRightColor: theme.backgroundSelected, backgroundColor: theme.backgroundElement }}>
+                    <View style={{ height: 130, padding: 8, justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.textSecondary }}>Ürün Bilgisi</Text>
+                    </View>
+                    {[
+                      'Fiyat',
+                      'Kategori',
+                      'Konum / Mesafe',
+                      'Güven Skoru',
+                      'Kilometre (KM)',
+                      'Model Yılı',
+                      'Vites Tipi',
+                      'Metrekare (m²)',
+                      'Oda Sayısı',
+                      'Durum / Kondisyon',
+                      'İşlem'
+                    ].map((label, idx) => (
+                      <View
+                        key={idx}
+                        style={{
+                          height: 50,
+                          paddingHorizontal: 8,
+                          justifyContent: 'center',
+                          borderTopWidth: 1,
+                          borderTopColor: theme.backgroundSelected,
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: theme.textSecondary }} numberOfLines={2}>
+                          {label}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Columns for Compared Listings */}
+                  {compareList.map((item) => {
+                    const distance = item.latitude !== undefined && item.longitude !== undefined 
+                      ? getDistance(USER_LATITUDE, USER_LONGITUDE, item.latitude, item.longitude).toFixed(0) + ' km'
+                      : '-';
+
+                    return (
+                      <View
+                        key={item.id}
+                        style={{
+                          width: 140,
+                          borderRightWidth: 1,
+                          borderRightColor: theme.backgroundSelected,
+                          alignItems: 'center',
+                        }}
+                      >
+                        {/* Thumbnail & Title header */}
+                        <View style={{ height: 130, padding: 8, alignItems: 'center', justifyContent: 'center', position: 'relative', width: '100%' }}>
+                          <Pressable
+                            style={{ position: 'absolute', top: 4, right: 4, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                            onPress={() => removeFromCompareList(item.id)}
+                          >
+                            <X size={12} color="#FFF" />
+                          </Pressable>
+                          <Image
+                            source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+                            style={{ width: 64, height: 64, borderRadius: 8, backgroundColor: '#000', marginBottom: 6 }}
+                          />
+                          <Text style={{ color: theme.text, fontSize: 10, fontWeight: 'bold', textAlign: 'center' }} numberOfLines={2}>
+                            {item.title}
+                          </Text>
+                        </View>
+
+                        {/* Price */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold', textAlign: 'center' }}>
+                            {item.price.toLocaleString('tr-TR')} TL
+                          </Text>
+                        </View>
+
+                        {/* Category */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }} numberOfLines={2}>
+                            {item.category}
+                          </Text>
+                        </View>
+
+                        {/* Location / Distance */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, fontWeight: '500', textAlign: 'center' }} numberOfLines={2}>
+                            {item.city} ({distance})
+                          </Text>
+                        </View>
+
+                        {/* Trust Score */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: isDark ? theme.gold : theme.goldAccent, fontSize: 10, fontWeight: 'bold' }}>
+                            {item.sellerTrustScore}/10
+                          </Text>
+                          {item.sellerVerified && (
+                            <Text style={{ color: '#10B981', fontSize: 8, fontWeight: 'bold', marginTop: 1 }}>✓ Doğrulanmış</Text>
+                          )}
+                        </View>
+
+                        {/* KM */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.km !== undefined ? item.km.toLocaleString('tr-TR') + ' km' : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Model Yılı */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.year !== undefined ? item.year : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Vites */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.transmission !== undefined ? item.transmission : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Sqm */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.sqm !== undefined ? item.sqm + ' m²' : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Rooms */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.rooms !== undefined ? item.rooms : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Condition */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.textSecondary, fontSize: 10, textAlign: 'center' }}>
+                            {item.condition}
+                          </Text>
+                        </View>
+
+                        {/* CTA button to visit product */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Pressable
+                            style={{ backgroundColor: theme.gold, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6 }}
+                            onPress={() => {
+                              setCompareModalVisible(false);
+                              router.push(`/product/${item.id}`);
+                            }}
+                          >
+                            <Text style={{ color: '#000', fontSize: 9, fontWeight: 'bold' }}>İncele</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </ScrollView>
+            )}
           </ThemedView>
         </View>
       </Modal>
@@ -973,29 +1796,70 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 1,
   },
-  backToGridHeader: {
+  reelsHeaderContainer: {
     position: 'absolute',
     left: 16,
     right: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     zIndex: 100,
+    gap: 10,
   },
-  backToGridBtn: {
+  reelsHeaderIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(7, 12, 25, 0.75)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reelsSearchInputWrapper: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(7, 12, 25, 0.75)',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    height: 40,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 12,
   },
-  backToGridText: {
+  reelsSearchIcon: {
+    marginRight: 6,
+  },
+  reelsSearchInput: {
+    flex: 1,
     color: '#F8FAFC',
-    fontWeight: 'bold',
+    fontSize: 13,
+    padding: 0,
+    height: '100%',
+  },
+  reelsWarningBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(255, 107, 0, 0.85)',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    zIndex: 9999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3.5,
+    elevation: 5,
+  },
+  reelsWarningText: {
+    color: '#FFFFFF',
     fontSize: 12,
-    marginLeft: 6,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   cardContainer: {
     position: 'relative',
@@ -1254,5 +2118,78 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  listItemContainer: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 10,
+    marginBottom: 4,
+  },
+  listItemImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 8,
+    resizeMode: 'cover',
+  },
+  listItemInfo: {
+    flex: 1,
+    marginLeft: 12,
+    justifyContent: 'space-between',
+  },
+  listItemTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1,
+    lineHeight: 18,
+  },
+  listItemPrice: {
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  listItemFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  verifiedBadgeTiny: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  verifiedBadgeTextTiny: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  typeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 0.5,
+  },
+  typeBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  reelsAddToCartBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    height: 38,
+    borderWidth: 1.5,
+    borderColor: '#FF5500',
+  },
+  reelsAddToCartBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 11,
+    letterSpacing: 0.5,
   },
 });

@@ -13,7 +13,7 @@ import {
   Text,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAppStore } from '@/services/store';
+import { useAppStore, Listing } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -34,9 +34,13 @@ import {
   MapPin,
   Store,
   Briefcase,
+  GitCompare,
 } from 'lucide-react-native';
 import { formatTime } from '@/utils/time';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import CategoryBadge from '@/components/category-badge';
+import * as LocalAuthentication from 'expo-local-authentication';
+
 
 function DetailVideoPlayer({ url, width }: { url: string; width: number }) {
   const [isMuted, setIsMuted] = useState(false);
@@ -163,7 +167,7 @@ export default function ProductDetailScreen() {
   const scheme = useColorScheme();
   const theme = Colors[scheme === 'dark' ? 'dark' : 'light'];
 
-  const { listings, toggleLike, placeBid, createChat, decrementTimers } = useAppStore();
+  const { listings, toggleLike, placeBid, createChat, decrementTimers, addToCart, setCartModalVisible, setCheckoutStep, isBiometricsEnabled, compareList, addToCompareList, removeFromCompareList } = useAppStore();
   const listing = listings.find((l) => l.id === id);
 
   const [bidValue, setBidValue] = useState('');
@@ -190,7 +194,7 @@ export default function ProductDetailScreen() {
     );
   }
 
-  const handleAction = () => {
+  const handleAction = async () => {
     if (listing.type === 'fixed' || listing.type === 'rent') {
       setSuccessMessage(listing.type === 'rent' ? 'Kiralama talebiniz satıcıya iletildi!' : 'Satın alma talebi satıcıya iletildi!');
       setTimeout(() => setSuccessMessage(''), 3000);
@@ -199,6 +203,23 @@ export default function ProductDetailScreen() {
       if (isNaN(amount) || amount <= 0) {
         setErrorMessage('Lütfen geçerli bir teklif girin.');
         return;
+      }
+
+      if (isBiometricsEnabled) {
+        try {
+          const authResult = await LocalAuthentication.authenticateAsync({
+            promptMessage: 'Teklifinizi onaylamak için kimliğinizi doğrulayın.',
+            fallbackLabel: 'Şifre Kullan',
+          });
+          if (!authResult.success) {
+            setErrorMessage('Biyometrik doğrulama başarısız oldu. Teklif gönderilmedi.');
+            return;
+          }
+        } catch (err) {
+          console.warn('Biometrics auth failed:', err);
+          setErrorMessage('Güvenlik doğrulamasında bir hata oluştu.');
+          return;
+        }
       }
 
       // Teklifli modelde en fazla %15 düşük teklif verilebilir kontrolü
@@ -247,9 +268,30 @@ export default function ProductDetailScreen() {
           </Pressable>
         </View>
         <Text style={[styles.navBarTitle, { color: theme.text }]}>Ürün Detayı</Text>
-        <Pressable style={[styles.navBarIcon, { backgroundColor: theme.backgroundElement }]} onPress={() => toggleLike(listing.id)}>
-          <Heart size={20} color={listing.liked ? '#EF4444' : theme.text} fill={listing.liked ? '#EF4444' : 'transparent'} />
-        </Pressable>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable 
+            style={[
+              styles.navBarIcon, 
+              { backgroundColor: theme.backgroundElement },
+              compareList.some(c => c.id === listing.id) && { borderColor: theme.gold, borderWidth: 1 }
+            ]} 
+            onPress={() => {
+              if (compareList.some(c => c.id === listing.id)) {
+                removeFromCompareList(listing.id);
+                Alert.alert('Çıkarıldı', 'İlan karşılaştırma listesinden çıkarıldı.');
+              } else {
+                addToCompareList(listing);
+                Alert.alert('Eklendi', 'İlan karşılaştırma listesine eklendi. (Toplam: ' + (compareList.length + 1) + ')');
+              }
+            }}
+          >
+            <GitCompare size={20} color={compareList.some(c => c.id === listing.id) ? theme.gold : theme.text} />
+          </Pressable>
+          
+          <Pressable style={[styles.navBarIcon, { backgroundColor: theme.backgroundElement }]} onPress={() => toggleLike(listing.id)}>
+            <Heart size={20} color={listing.liked ? '#EF4444' : theme.text} fill={listing.liked ? '#EF4444' : 'transparent'} />
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -271,7 +313,7 @@ export default function ProductDetailScreen() {
             {/* Header info */}
             <View style={styles.infoHead}>
               <View style={styles.categoryRow}>
-                <ThemedText style={styles.categoryLabel}>{listing.category}</ThemedText>
+                <CategoryBadge item={listing} />
                 <ThemedText style={{ color: theme.textSecondary }}>•</ThemedText>
                 <ThemedText style={{ color: theme.gold, fontWeight: 'bold' }}>{listing.condition}</ThemedText>
               </View>
@@ -313,7 +355,6 @@ export default function ProductDetailScreen() {
             <ThemedView type="backgroundElement" style={[styles.sellerCard, { borderColor: theme.backgroundSelected }]}>
               <Pressable
                 onPress={() => router.push(`/seller/${encodeURIComponent(listing.sellerName)}`)}
-                delayPressIn={0}
                 hitSlop={15}
                 style={({ pressed }) => [
                   { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
@@ -322,7 +363,7 @@ export default function ProductDetailScreen() {
               >
                 <Image source={{ uri: listing.sellerAvatar }} style={styles.sellerAvatar} />
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                     <ThemedText style={styles.sellerName}>{listing.sellerName}</ThemedText>
                     {(() => {
                       if (!listing.sellerVerified) return null;
@@ -337,7 +378,7 @@ export default function ProductDetailScreen() {
                         >
                           <Image
                             source={badge.image}
-                            style={{ width: 14, height: 15, resizeMode: 'contain' }}
+                            style={{ width: 18, height: 20, resizeMode: 'contain' }}
                           />
                         </Pressable>
                       ));
@@ -456,12 +497,33 @@ export default function ProductDetailScreen() {
               {successMessage !== '' && <ThemedText style={styles.successText}>{successMessage}</ThemedText>}
               {errorMessage !== '' && <ThemedText style={styles.errorText}>{errorMessage}</ThemedText>}
 
-              {listing.type === 'fixed' || listing.type === 'rent' ? (
+              {listing.type === 'fixed' ? (
+                <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                  <Pressable 
+                    style={[styles.submitBtn, { flex: 1, backgroundColor: 'rgba(255, 85, 0, 0.12)', borderWidth: 1.5, borderColor: '#FF5500' }]} 
+                    onPress={() => {
+                      addToCart(listing.id);
+                      setSuccessMessage('Ürün sepete eklendi!');
+                      setTimeout(() => setSuccessMessage(''), 2500);
+                    }}
+                  >
+                    <Text style={[styles.submitBtnText, { color: '#FF5500' }]}>Sepete Ekle</Text>
+                  </Pressable>
+                  <Pressable 
+                    style={[styles.submitBtn, { flex: 1 }]} 
+                    onPress={() => {
+                      addToCart(listing.id);
+                      setCheckoutStep('shipping');
+                      setCartModalVisible(true);
+                    }}
+                  >
+                    <Text style={styles.submitBtnText}>Hemen Al</Text>
+                  </Pressable>
+                </View>
+              ) : listing.type === 'rent' ? (
                 <Pressable style={styles.submitBtn} onPress={handleAction}>
                   <ThemedText style={styles.submitBtnText}>
-                    {listing.type === 'rent'
-                      ? `Hemen Kirala (${listing.price} TL / ${listing.rentPeriod || 'Günlük'})`
-                      : `Satın Al (${listing.price} TL)`}
+                    Hemen Kirala ({listing.price} TL / {listing.rentPeriod || 'Günlük'})
                   </ThemedText>
                 </Pressable>
               ) : (

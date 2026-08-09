@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Modal, ScrollView, Pressable, Text, TextInput, Image, Platform, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Modal, ScrollView, Pressable, Text, TextInput, Image, Platform, ActivityIndicator, Switch } from 'react-native';
 import { useColorScheme } from 'react-native';
 import { Colors } from '@/constants/theme';
 import { useAppStore } from '@/services/store';
-import { X, ShoppingCart, Trash2, Minus, Plus, ChevronRight } from 'lucide-react-native';
+import { X, ShoppingCart, Trash2, Minus, Plus, ChevronRight, CreditCard, Check } from 'lucide-react-native';
 import { ThemedView } from './themed-view';
 import { ThemedText } from './themed-text';
 import { PaymentService } from '@/services/payment';
@@ -22,6 +22,11 @@ export default function GlobalCartModal() {
     removeFromCart,
     updateCartQuantity,
     clearCart,
+    currentUser,
+    addOrder,
+    savedCards,
+    addSavedCard,
+    deleteSavedCard,
   } = useAppStore();
 
   // Shipping Form
@@ -38,6 +43,8 @@ export default function GlobalCartModal() {
   const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState('');
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [saveCardSecurely, setSaveCardSecurely] = useState(false);
 
   const cartSubtotal = cart.reduce((acc, item) => acc + item.listing.price * item.quantity, 0);
   const cartTotal = cartSubtotal; // Free shipping
@@ -63,15 +70,20 @@ export default function GlobalCartModal() {
       setFormErrors({});
       setCheckoutStep('payment');
     } else if (checkoutStep === 'payment') {
-      if (!cardHolder.trim()) errors.cardHolder = 'Kart sahibi adı zorunludur.';
-      if (cardNumber.replace(/\s/g, '').length < 16) errors.cardNumber = 'Geçersiz kart numarası.';
-      if (cardExpiry.length < 5) errors.cardExpiry = 'Geçersiz son kullanma tarihi.';
-      if (cardCvv.length < 3) errors.cardCvv = 'Geçersiz CVV.';
+      const isSavedCardUsed = selectedCardId !== null;
 
-      if (Object.keys(errors).length > 0) {
-        setFormErrors(errors);
-        return;
+      if (!isSavedCardUsed) {
+        if (!cardHolder.trim()) errors.cardHolder = 'Kart sahibi adı zorunludur.';
+        if (cardNumber.replace(/\s/g, '').length < 16) errors.cardNumber = 'Geçersiz kart numarası.';
+        if (cardExpiry.length < 5) errors.cardExpiry = 'Geçersiz son kullanma tarihi.';
+        if (cardCvv.length < 3) errors.cardCvv = 'Geçersiz CVV.';
+
+        if (Object.keys(errors).length > 0) {
+          setFormErrors(errors);
+          return;
+        }
       }
+
       setFormErrors({});
       setPaymentError('');
       setIsProcessing(true);
@@ -84,24 +96,65 @@ export default function GlobalCartModal() {
           quantity: item.quantity
         }));
 
-        const response = await PaymentService.processPayment(
-          {
-            cardNumber,
-            cardHolder,
-            cardExpiry,
-            cardCvv
-          },
-          {
-            items: paymentItems,
-            totalAmount: cartTotal,
-            shippingName,
-            shippingPhone,
-            shippingAddress
+        const paymentDetails = {
+          items: paymentItems,
+          totalAmount: cartTotal,
+          shippingName,
+          shippingPhone,
+          shippingAddress
+        };
+
+        let response;
+
+        if (isSavedCardUsed) {
+          // Process payment with stored token securely
+          const selectedCard = savedCards.find(c => c.id === selectedCardId);
+          response = await PaymentService.processPaymentWithToken(
+            selectedCard?.token || '',
+            paymentDetails
+          );
+        } else {
+          // Process payment with raw card details
+          response = await PaymentService.processPayment(
+            {
+              cardNumber,
+              cardHolder,
+              cardExpiry,
+              cardCvv
+            },
+            paymentDetails
+          );
+
+          // If payment succeeds and user chose to save the card securely
+          if (response.success && response.transactionStatus === 'SUCCESS' && saveCardSecurely) {
+            const tokenizeResult = await PaymentService.tokenizeCard({
+              cardNumber,
+              cardHolder,
+              cardExpiry,
+              cardCvv
+            });
+            if (tokenizeResult.success && tokenizeResult.token && tokenizeResult.cardSummary) {
+              addSavedCard({
+                token: tokenizeResult.token,
+                cardSummary: tokenizeResult.cardSummary,
+                cardHolder: cardHolder
+              });
+            }
           }
-        );
+        }
 
         if (response.success && response.transactionStatus === 'SUCCESS') {
-          setOrderId(response.orderId || '');
+          const generatedId = addOrder({
+            buyerId: currentUser?.id || 'guest_buyer',
+            buyerName: shippingName,
+            buyerPhone: shippingPhone,
+            buyerAddress: shippingAddress,
+            sellerName: cart[0]?.listing.sellerName || 'Mega Holding A.Ş.',
+            items: [...cart],
+            totalAmount: cartTotal
+          });
+
+          setOrderId(generatedId || response.orderId || '');
           clearCart();
           setCheckoutStep('completed');
           
@@ -113,6 +166,8 @@ export default function GlobalCartModal() {
           setShippingName('');
           setShippingPhone('');
           setShippingAddress('');
+          setSelectedCardId(null);
+          setSaveCardSecurely(false);
         } else {
           setPaymentError(response.errorMessage || 'Ödeme işlemi başarısız oldu.');
         }
@@ -301,123 +356,239 @@ export default function GlobalCartModal() {
 
             {checkoutStep === 'payment' && (
               <View style={{ gap: 16 }}>
-                {/* Credit Card Visual */}
-                <View style={[styles.creditCardVisual, { backgroundColor: theme.background, borderColor: theme.gold }]}>
-                  <View style={styles.creditCardHeader}>
-                    <Text style={[styles.creditCardLogo, { color: theme.text }]}>PRESTIGE CARD</Text>
-                    <Text style={{ color: theme.gold, fontSize: 10, fontWeight: 'bold' }}>CREDIT</Text>
-                  </View>
-                  <Text style={[styles.creditCardNumber, { color: theme.text }]}>
-                    {cardNumber ? cardNumber : '•••• •••• •••• ••••'}
-                  </Text>
-                  <View style={styles.creditCardFooter}>
-                    <View>
-                      <Text style={styles.creditCardLabel}>KART SAHİBİ</Text>
-                      <Text style={[styles.creditCardText, { color: theme.text }]}>
-                        {cardHolder ? cardHolder.toUpperCase() : 'HİMMET AKAR'}
+                {/* Saved Cards Selector Header */}
+                {savedCards.length > 0 && (
+                  <View style={{ flexDirection: 'row', borderRadius: 8, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#F1F5F9', padding: 4 }}>
+                    <Pressable
+                      style={{
+                        flex: 1,
+                        paddingVertical: 8,
+                        borderRadius: 6,
+                        backgroundColor: selectedCardId !== null ? theme.gold : 'transparent',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      onPress={() => {
+                        setSelectedCardId(savedCards[0].id);
+                      }}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: selectedCardId !== null ? '#000000' : theme.text }}>
+                        Kayıtlı Kartlarım ({savedCards.length})
                       </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.creditCardLabel}>GEÇERLİLİK</Text>
-                      <Text style={[styles.creditCardText, { color: theme.text }]}>
-                        {cardExpiry ? cardExpiry : 'MM/YY'}
+                    </Pressable>
+                    <Pressable
+                      style={{
+                        flex: 1,
+                        paddingVertical: 8,
+                        borderRadius: 6,
+                        backgroundColor: selectedCardId === null ? theme.gold : 'transparent',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      onPress={() => {
+                        setSelectedCardId(null);
+                      }}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: selectedCardId === null ? '#000000' : theme.text }}>
+                        Yeni Kart Kullan
                       </Text>
-                    </View>
+                    </Pressable>
                   </View>
-                </View>
+                )}
+
+                {/* If Saved Card selected, show saved card selector list */}
+                {selectedCardId !== null && savedCards.length > 0 ? (
+                  <View style={{ gap: 10 }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.textSecondary }}>KART SEÇİNİZ</Text>
+                    {savedCards.map((savedCard) => {
+                      const isSelected = savedCard.id === selectedCardId;
+                      return (
+                        <Pressable
+                          key={savedCard.id}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: 12,
+                            borderRadius: 10,
+                            borderWidth: 1,
+                            borderColor: isSelected ? theme.gold : theme.backgroundSelected,
+                            backgroundColor: isSelected ? (isDark ? 'rgba(255,107,0,0.04)' : '#FFFBF7') : theme.background,
+                          }}
+                          onPress={() => setSelectedCardId(savedCard.id)}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            <CreditCard size={20} color={isSelected ? theme.gold : theme.textSecondary} />
+                            <View>
+                              <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 13 }}>
+                                {savedCard.cardSummary}
+                              </Text>
+                              <Text style={{ color: theme.textSecondary, fontSize: 11, marginTop: 1 }}>
+                                {savedCard.cardHolder}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            {isSelected && (
+                              <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: theme.gold, alignItems: 'center', justifyContent: 'center' }}>
+                                <Check size={12} color="#000000" />
+                              </View>
+                            )}
+                            <Pressable
+                              style={{ padding: 4 }}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                deleteSavedCard(savedCard.id);
+                                if (savedCards.length <= 1) {
+                                  setSelectedCardId(null);
+                                }
+                              }}
+                            >
+                              <Trash2 size={16} color="#EF4444" />
+                            </Pressable>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <>
+                    {/* Credit Card Visual */}
+                    <View style={[styles.creditCardVisual, { backgroundColor: theme.background, borderColor: theme.gold }]}>
+                      <View style={styles.creditCardHeader}>
+                        <Text style={[styles.creditCardLogo, { color: theme.text }]}>PRESTIGE CARD</Text>
+                        <Text style={{ color: theme.gold, fontSize: 10, fontWeight: 'bold' }}>CREDIT</Text>
+                      </View>
+                      <Text style={[styles.creditCardNumber, { color: theme.text }]}>
+                        {cardNumber ? cardNumber : '•••• •••• •••• ••••'}
+                      </Text>
+                      <View style={styles.creditCardFooter}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.creditCardLabel}>KART SAHİBİ</Text>
+                          <Text style={[styles.creditCardText, { color: theme.text }]} numberOfLines={1}>
+                            {cardHolder ? cardHolder.toUpperCase() : 'HİMMET AKAR'}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end', marginLeft: 10 }}>
+                          <Text style={styles.creditCardLabel}>GEÇERLİLİK</Text>
+                          <Text style={[styles.creditCardText, { color: theme.text }]}>
+                            {cardExpiry ? cardExpiry : 'MM/YY'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.formGroup}>
+                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Kart Sahibinin Adı</Text>
+                      <TextInput
+                        style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                        placeholder="KART ÜZERİNDEKİ İSİM"
+                        placeholderTextColor={theme.textSecondary}
+                        value={cardHolder}
+                        editable={!isProcessing}
+                        onChangeText={(text) => {
+                          setCardHolder(text);
+                          if (formErrors.cardHolder) {
+                            setFormErrors(prev => { const copy = { ...prev }; delete copy.cardHolder; return copy; });
+                          }
+                        }}
+                      />
+                      {formErrors.cardHolder && <Text style={styles.formErrorText}>{formErrors.cardHolder}</Text>}
+                    </View>
+
+                    <View style={styles.formGroup}>
+                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Kart Numarası</Text>
+                      <TextInput
+                        style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                        placeholder="0000 0000 0000 0000"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        maxLength={19}
+                        value={cardNumber}
+                        editable={!isProcessing}
+                        onChangeText={(text) => {
+                          const cleaned = text.replace(/\D/g, '');
+                          const formatted = cleaned.match(/.{1,4}/g)?.join(' ') || cleaned;
+                          setCardNumber(formatted);
+                          if (formErrors.cardNumber) {
+                            setFormErrors(prev => { const copy = { ...prev }; delete copy.cardNumber; return copy; });
+                          }
+                        }}
+                      />
+                      {formErrors.cardNumber && <Text style={styles.formErrorText}>{formErrors.cardNumber}</Text>}
+                    </View>
+
+                    <View style={styles.formRow}>
+                      <View style={[styles.formGroup, { flex: 1 }]}>
+                        <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Son Kul. (AA/YY)</Text>
+                        <TextInput
+                          style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                          placeholder="MM/YY"
+                          placeholderTextColor={theme.textSecondary}
+                          maxLength={5}
+                          value={cardExpiry}
+                          editable={!isProcessing}
+                          onChangeText={(text) => {
+                            const cleaned = text.replace(/\D/g, '');
+                            let formatted = cleaned;
+                            if (cleaned.length > 2) {
+                              formatted = `${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}`;
+                            }
+                            setCardExpiry(formatted);
+                            if (formErrors.cardExpiry) {
+                              setFormErrors(prev => { const copy = { ...prev }; delete copy.cardExpiry; return copy; });
+                            }
+                          }}
+                        />
+                        {formErrors.cardExpiry && <Text style={styles.formErrorText}>{formErrors.cardExpiry}</Text>}
+                      </View>
+
+                      <View style={[styles.formGroup, { flex: 1 }]}>
+                        <Text style={[styles.formLabel, { color: theme.textSecondary }]}>CVV</Text>
+                        <TextInput
+                          style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                          placeholder="123"
+                          placeholderTextColor={theme.textSecondary}
+                          keyboardType="numeric"
+                          maxLength={3}
+                          value={cardCvv}
+                          editable={!isProcessing}
+                          onChangeText={(text) => {
+                            setCardCvv(text.replace(/\D/g, ''));
+                            if (formErrors.cardCvv) {
+                              setFormErrors(prev => { const copy = { ...prev }; delete copy.cardCvv; return copy; });
+                            }
+                          }}
+                        />
+                        {formErrors.cardCvv && <Text style={styles.formErrorText}>{formErrors.cardCvv}</Text>}
+                      </View>
+                    </View>
+
+                    {/* Card Save Toggle Option */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, paddingVertical: 4 }}>
+                      <View style={{ flex: 1, paddingRight: 16 }}>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: theme.text }}>Kartımı Güvenle Kaydet</Text>
+                        <Text style={{ fontSize: 10, color: theme.textSecondary, marginTop: 1 }}>
+                          Kart bilgileri banka güvencesiyle şifrelenip token olarak saklanır.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={saveCardSecurely}
+                        onValueChange={setSaveCardSecurely}
+                        trackColor={{ false: isDark ? '#1E293B' : '#E2E8F0', true: theme.gold }}
+                        thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
+                        disabled={isProcessing}
+                      />
+                    </View>
+                  </>
+                )}
 
                 {paymentError !== '' && (
                   <View style={{ backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: '#EF4444', padding: 12, borderRadius: 6 }}>
                     <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: 'bold', textAlign: 'center' }}>{paymentError}</Text>
                   </View>
                 )}
-
-                <View style={styles.formGroup}>
-                  <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Kart Sahibinin Adı</Text>
-                  <TextInput
-                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                    placeholder="KART ÜZERİNDEKİ İSİM"
-                    placeholderTextColor={theme.textSecondary}
-                    value={cardHolder}
-                    editable={!isProcessing}
-                    onChangeText={(text) => {
-                      setCardHolder(text);
-                      if (formErrors.cardHolder) {
-                        setFormErrors(prev => { const copy = { ...prev }; delete copy.cardHolder; return copy; });
-                      }
-                    }}
-                  />
-                  {formErrors.cardHolder && <Text style={styles.formErrorText}>{formErrors.cardHolder}</Text>}
-                </View>
-
-                <View style={styles.formGroup}>
-                  <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Kart Numarası</Text>
-                  <TextInput
-                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                    placeholder="0000 0000 0000 0000"
-                    placeholderTextColor={theme.textSecondary}
-                    keyboardType="numeric"
-                    maxLength={19}
-                    value={cardNumber}
-                    editable={!isProcessing}
-                    onChangeText={(text) => {
-                      const cleaned = text.replace(/\D/g, '');
-                      const formatted = cleaned.match(/.{1,4}/g)?.join(' ') || cleaned;
-                      setCardNumber(formatted);
-                      if (formErrors.cardNumber) {
-                        setFormErrors(prev => { const copy = { ...prev }; delete copy.cardNumber; return copy; });
-                      }
-                    }}
-                  />
-                  {formErrors.cardNumber && <Text style={styles.formErrorText}>{formErrors.cardNumber}</Text>}
-                </View>
-
-                <View style={styles.formRow}>
-                  <View style={[styles.formGroup, { flex: 1 }]}>
-                    <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Son Kul. (AA/YY)</Text>
-                    <TextInput
-                      style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      placeholder="MM/YY"
-                      placeholderTextColor={theme.textSecondary}
-                      maxLength={5}
-                      value={cardExpiry}
-                      editable={!isProcessing}
-                      onChangeText={(text) => {
-                        const cleaned = text.replace(/\D/g, '');
-                        let formatted = cleaned;
-                        if (cleaned.length > 2) {
-                          formatted = `${cleaned.slice(0, 2)}/${cleaned.slice(2, 4)}`;
-                        }
-                        setCardExpiry(formatted);
-                        if (formErrors.cardExpiry) {
-                          setFormErrors(prev => { const copy = { ...prev }; delete copy.cardExpiry; return copy; });
-                        }
-                      }}
-                    />
-                    {formErrors.cardExpiry && <Text style={styles.formErrorText}>{formErrors.cardExpiry}</Text>}
-                  </View>
-
-                  <View style={[styles.formGroup, { flex: 1 }]}>
-                    <Text style={[styles.formLabel, { color: theme.textSecondary }]}>CVV</Text>
-                    <TextInput
-                      style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
-                      placeholder="123"
-                      placeholderTextColor={theme.textSecondary}
-                      keyboardType="numeric"
-                      maxLength={3}
-                      value={cardCvv}
-                      editable={!isProcessing}
-                      onChangeText={(text) => {
-                        setCardCvv(text.replace(/\D/g, ''));
-                        if (formErrors.cardCvv) {
-                          setFormErrors(prev => { const copy = { ...prev }; delete copy.cardCvv; return copy; });
-                        }
-                      }}
-                    />
-                    {formErrors.cardCvv && <Text style={styles.formErrorText}>{formErrors.cardCvv}</Text>}
-                  </View>
-                </View>
-
+                
                 <View style={styles.formNavigationRow}>
                   <Pressable 
                     style={[styles.formBackBtn, { borderColor: theme.backgroundSelected }, isProcessing && { opacity: 0.5 }]} 

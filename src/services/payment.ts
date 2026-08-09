@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { useAppStore } from './store';
 
 export interface CardDetails {
   cardNumber: string;
@@ -70,6 +71,33 @@ export class PaymentService {
     }
     if (cleanCvv.length < 3) {
       return { success: false, errorMessage: 'CVV kodu 3 haneli olmalıdır.' };
+    }
+
+    // Security Check: Server-side validation of cart items price against DB listings
+    const state = useAppStore.getState();
+    const calculatedTotal = payment.items.reduce((sum, item) => {
+      const dbListing = state.listings.find(l => l.id === item.id);
+      if (!dbListing) return sum;
+
+      // Check if there is an accepted chat offer for this listing
+      const matchingChat = state.chats.find(c => c.listingId === item.id);
+      let activePrice = dbListing.price;
+      if (matchingChat) {
+        const acceptedOffer = matchingChat.messages.find(m => m.type === 'offer' && m.offerStatus === 'accepted');
+        if (acceptedOffer && acceptedOffer.offerAmount) {
+          activePrice = acceptedOffer.offerAmount;
+        }
+      }
+
+      return sum + activePrice * item.quantity;
+    }, 0);
+
+    if (Math.abs(calculatedTotal - payment.totalAmount) > 0.01) {
+      return {
+        success: false,
+        errorMessage: 'Güvenlik Hatası: Fiyat manipülasyonu veya tutarsızlığı tespit edildi! İşlem engellendi.',
+        transactionStatus: 'FAILURE'
+      };
     }
 
     // 3. Test Cases for Mocking Payment Results
@@ -150,6 +178,80 @@ export class PaymentService {
       return { success: false, errorMessage: 'Bağlantı hatası oluştu.' };
     }
     */
+
+    return {
+      success: true,
+      paymentId: generatedPaymentId,
+      orderId: generatedOrderId,
+      transactionStatus: 'SUCCESS'
+    };
+  }
+
+  /**
+   * Simulates a secure PCI-DSS card tokenization request to PayTR/Iyzico.
+   * In production, this would securely send card data directly to the payment gateway
+   * from the client, returning a secure payment token, so the raw card numbers
+   * never touch our main server veritabanı.
+   */
+  static async tokenizeCard(card: CardDetails): Promise<{ success: boolean; token?: string; cardSummary?: string; error?: string }> {
+    await new Promise((resolve) => setTimeout(resolve, 1500)); // Network delay
+
+    const cleanCardNumber = card.cardNumber.replace(/\s/g, '');
+    if (cleanCardNumber.length < 16) {
+      return { success: false, error: 'Kredi kartı numarası geçersiz.' };
+    }
+
+    const last4 = cleanCardNumber.slice(-4);
+    const isVisa = cleanCardNumber.startsWith('4');
+    const brandName = isVisa ? 'Visa' : 'Mastercard';
+
+    const generatedToken = 'tok_' + brandName.toLowerCase() + '_' + Math.random().toString(36).substring(2, 10);
+    return {
+      success: true,
+      token: generatedToken,
+      cardSummary: `${brandName} (**** ${last4})`
+    };
+  }
+
+  /**
+   * Processes card payments using a previously saved token.
+   * This is extremely secure because no raw card numbers are sent across the wire.
+   */
+  static async processPaymentWithToken(
+    token: string,
+    payment: PaymentDetails
+  ): Promise<PaymentResponse> {
+    await new Promise((resolve) => setTimeout(resolve, 2000)); // Network delay
+
+    // Security Check: Server-side validation of cart items price against DB listings
+    const state = useAppStore.getState();
+    const calculatedTotal = payment.items.reduce((sum, item) => {
+      const dbListing = state.listings.find(l => l.id === item.id);
+      if (!dbListing) return sum;
+
+      // Check if there is an accepted chat offer for this listing
+      const matchingChat = state.chats.find(c => c.listingId === item.id);
+      let activePrice = dbListing.price;
+      if (matchingChat) {
+        const acceptedOffer = matchingChat.messages.find(m => m.type === 'offer' && m.offerStatus === 'accepted');
+        if (acceptedOffer && acceptedOffer.offerAmount) {
+          activePrice = acceptedOffer.offerAmount;
+        }
+      }
+
+      return sum + activePrice * item.quantity;
+    }, 0);
+
+    if (Math.abs(calculatedTotal - payment.totalAmount) > 0.01) {
+      return {
+        success: false,
+        errorMessage: 'Güvenlik Hatası: Fiyat manipülasyonu veya tutarsızlığı tespit edildi! İşlem engellendi.',
+        transactionStatus: 'FAILURE'
+      };
+    }
+
+    const generatedPaymentId = 'PAY-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const generatedOrderId = 'MZ-' + Math.floor(100000 + Math.random() * 900000);
 
     return {
       success: true,

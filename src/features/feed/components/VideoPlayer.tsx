@@ -3,6 +3,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { View, StyleSheet, Pressable, Platform, Image } from 'react-native';
 import { Volume2, VolumeX } from 'lucide-react-native';
 import { useEvent } from 'expo';
+import { VideoCacheManager } from '@/services/video-cache';
 
 interface VideoPlayerProps {
   url: string;
@@ -10,7 +11,7 @@ interface VideoPlayerProps {
   posterUrl?: string;
 }
 
-export default function VideoPlayer({ url, isActive, posterUrl }: VideoPlayerProps) {
+function ActualVideoPlayer({ url, isActive, posterUrl }: VideoPlayerProps) {
   const [isMuted, setIsMuted] = useState(false);
 
   const player = useVideoPlayer(url, (p) => {
@@ -63,6 +64,40 @@ export default function VideoPlayer({ url, isActive, posterUrl }: VideoPlayerPro
       </Pressable>
     </View>
   );
+}
+
+export default function VideoPlayer({ url, isActive, posterUrl }: VideoPlayerProps) {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function resolveVideo() {
+      const cached = await VideoCacheManager.getCachedUri(url);
+      if (active) {
+        setResolvedUrl(cached);
+      }
+    }
+    resolveVideo();
+    return () => {
+      active = false;
+    };
+  }, [url]);
+
+  if (!resolvedUrl) {
+    return (
+      <View style={styles.container}>
+        {posterUrl && (
+          <Image
+            source={typeof posterUrl === 'number' ? posterUrl : { uri: posterUrl }}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+        )}
+      </View>
+    );
+  }
+
+  return <ActualVideoPlayer url={resolvedUrl} isActive={isActive} posterUrl={posterUrl} />;
 }
 
 const styles = StyleSheet.create({

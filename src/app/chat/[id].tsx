@@ -30,6 +30,7 @@ import {
   Image as ImageIcon,
   MapPin,
   FileText,
+  ShoppingCart,
 } from 'lucide-react-native';
 
 export default function ChatDetailScreen() {
@@ -100,6 +101,26 @@ export default function ChatDetailScreen() {
     setOfferAmount('');
     setOfferError('');
     setOfferModalVisible(false);
+  };
+
+  const handleBuyOffer = (offerAmount: number) => {
+    const listing = listings.find((l) => l.id === chat.listingId);
+    if (!listing) return;
+    
+    // Add to cart with custom offer price
+    const cartItem = {
+      listing: {
+        ...listing,
+        price: offerAmount
+      },
+      quantity: 1
+    };
+    
+    // Update store state directly
+    useAppStore.setState({
+      cart: [cartItem],
+      cartModalVisible: true,
+    });
   };
 
   const handleSendAttachment = (type: Message['type'], label: string) => {
@@ -176,9 +197,38 @@ export default function ChatDetailScreen() {
             ) : (
               <View style={styles.statusLabelContainer}>
                 {item.offerStatus === 'accepted' ? (
-                  <View style={styles.statusLabelAccept}>
-                    <Check size={12} color="#070C19" />
-                    <Text style={styles.statusTextAccept}>Teklif Kabul Edildi</Text>
+                  <View style={{ gap: 8, alignSelf: 'stretch' }}>
+                    <View style={styles.statusLabelAccept}>
+                      <Check size={12} color="#070C19" />
+                      <Text style={styles.statusTextAccept}>Teklif Kabul Edildi</Text>
+                    </View>
+                    {/* Render Buy Button if viewer is the buyer */}
+                    {currentUser?.role === 'customer' && (
+                      <Pressable
+                        style={{
+                          backgroundColor: theme.gold,
+                          paddingVertical: 8,
+                          paddingHorizontal: 12,
+                          borderRadius: 6,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginTop: 6,
+                          flexDirection: 'row',
+                          gap: 6,
+                          elevation: 2,
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 1 },
+                          shadowOpacity: 0.2,
+                          shadowRadius: 1.41,
+                        }}
+                        onPress={() => handleBuyOffer(item.offerAmount || 0)}
+                      >
+                        <ShoppingCart size={14} color="#000000" />
+                        <Text style={{ color: '#000000', fontSize: 12, fontWeight: 'bold' }}>
+                          Teklif Fiyatıyla Satın Al
+                        </Text>
+                      </Pressable>
+                    )}
                   </View>
                 ) : (
                   <View style={styles.statusLabelReject}>
@@ -240,16 +290,20 @@ export default function ChatDetailScreen() {
         
         <View style={styles.headerTitleContainer}>
           <ThemedText style={styles.headerName}>{chat.otherPartyName}</ThemedText>
-          <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
-            <ThemedText style={styles.headerListing} numberOfLines={1}>
-              İlan: {chat.listingTitle}
-            </ThemedText>
-          </Pressable>
+          {!chat.fromSellerProfile && (
+            <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
+              <ThemedText style={styles.headerListing} numberOfLines={1}>
+                İlan: {chat.listingTitle}
+              </ThemedText>
+            </Pressable>
+          )}
         </View>
 
-        <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
-          <Image source={typeof chat.listingImage === 'number' ? chat.listingImage : { uri: chat.listingImage }} style={styles.headerListingThumb} />
-        </Pressable>
+        {!chat.fromSellerProfile && (
+          <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
+            <Image source={typeof chat.listingImage === 'number' ? chat.listingImage : { uri: chat.listingImage }} style={styles.headerListingThumb} />
+          </Pressable>
+        )}
       </View>
 
       {/* Messages Thread */}

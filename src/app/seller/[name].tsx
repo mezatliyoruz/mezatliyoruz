@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -11,9 +11,13 @@ import {
   Alert,
   Text,
   Share,
+  Modal,
+  Animated as RNAnimated,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAppStore, Listing } from '@/services/store';
+import { useAppStore, Listing, Story } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -29,6 +33,9 @@ import {
   Briefcase,
   Share2,
   ShieldCheck,
+  X,
+  Star,
+  Check,
 } from 'lucide-react-native';
 
 const getSellerBadges = (item: { sellerName: string; sellerVerified: boolean; category: string; isRealEstate?: boolean; isVehicle?: boolean; type?: string }) => {
@@ -103,8 +110,79 @@ export default function SellerProfileScreen() {
   const router = useRouter();
   const sellerName = typeof name === 'string' ? decodeURIComponent(name) : '';
   
-  const { listings, createChat } = useAppStore();
+  const { listings, createChat, stories, currentUser, addStory, reviews } = useAppStore();
   const sellerListings = listings.filter((l) => l.sellerName === sellerName);
+  const sellerStories = (stories || []).filter(s => s.sellerName === sellerName);
+  const hasStories = sellerStories.length > 0;
+
+  const [storyViewerVisible, setStoryViewerVisible] = useState(false);
+  const [activeStoryIndex, setActiveStoryIndex] = useState(0);
+  const storyProgress = useRef(new RNAnimated.Value(0)).current;
+  const [storyListingSelect, setStoryListingSelect] = useState<Listing | null>(null);
+  const [activeTab, setActiveTab] = useState<'listings' | 'reviews'>('listings');
+
+  // Story video player helper inside this component
+  const StoryVideoPlayer = ({ url, isActive }: { url: string; isActive: boolean }) => {
+    const player = useVideoPlayer(url, (p) => {
+      p.loop = false;
+      p.muted = false;
+    });
+
+    useEffect(() => {
+      if (isActive) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    }, [isActive, player]);
+
+    return (
+      <VideoView
+        player={player}
+        style={{ width: '100%', height: '100%', minHeight: 300 }}
+        nativeControls={false}
+        contentFit="contain"
+      />
+    );
+  };
+
+  // Story viewer timing animation
+  useEffect(() => {
+    let animation: any;
+    if (storyViewerVisible && sellerStories.length > 0) {
+      storyProgress.setValue(0);
+      animation = RNAnimated.timing(storyProgress, {
+        toValue: 1,
+        duration: 5000, // 5 seconds per story
+        useNativeDriver: false,
+      });
+      animation.start(({ finished }: any) => {
+        if (finished) {
+          handleNextStory();
+        }
+      });
+    } else {
+      storyProgress.setValue(0);
+    }
+    return () => {
+      if (animation) animation.stop();
+    };
+  }, [storyViewerVisible, activeStoryIndex]);
+
+  const handleNextStory = () => {
+    if (activeStoryIndex < sellerStories.length - 1) {
+      setActiveStoryIndex(prev => prev + 1);
+    } else {
+      setStoryViewerVisible(false);
+      setActiveStoryIndex(0);
+    }
+  };
+
+  const handlePrevStory = () => {
+    if (activeStoryIndex > 0) {
+      setActiveStoryIndex(prev => prev - 1);
+    }
+  };
 
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
@@ -125,7 +203,7 @@ export default function SellerProfileScreen() {
       Alert.alert('Hata', 'Bu satıcıya ait aktif ilan bulunamadı.');
       return;
     }
-    const chatId = createChat(firstListing.id);
+    const chatId = createChat(firstListing.id, true);
     if (chatId) {
       router.push(`/chat/${chatId}`);
     }
@@ -162,9 +240,22 @@ export default function SellerProfileScreen() {
         <View style={styles.profileSection}>
           {/* Main Info Card */}
           <View style={[styles.profileCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
-            <View style={[styles.avatarContainer, { borderColor: theme.gold }]}>
-              <Image source={{ uri: sellerAvatar }} style={styles.avatar} />
-            </View>
+            {hasStories ? (
+              <Pressable onPress={() => { setStoryViewerVisible(true); setActiveStoryIndex(0); }}>
+                <LinearGradient
+                  colors={['#833ab4', '#fd1d1d', '#fcb045']}
+                  style={styles.storyRing}
+                >
+                  <View style={[styles.avatarContainerStory, { backgroundColor: cardBg }]}>
+                    <Image source={{ uri: sellerAvatar }} style={styles.avatar} />
+                  </View>
+                </LinearGradient>
+              </Pressable>
+            ) : (
+              <View style={[styles.avatarContainer, { borderColor: theme.gold }]}>
+                <Image source={{ uri: sellerAvatar }} style={styles.avatar} />
+              </View>
+            )}
             <View style={styles.profileInfo}>
               <View style={styles.nameRow}>
                 <Text style={[styles.userName, { color: theme.text }]}>
@@ -186,9 +277,24 @@ export default function SellerProfileScreen() {
                 )}
               </View>
 
-              <Text style={[styles.trustScoreText, { color: isDark ? theme.gold : theme.goldAccent }]}>
-                Güven Skoru: {sellerTrustScore}/10
-              </Text>
+               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginVertical: 2 }}>
+                <Text style={[styles.trustScoreText, { color: isDark ? theme.gold : theme.goldAccent, marginBottom: 0 }]}>
+                  Güven Skoru: {sellerTrustScore}/10
+                </Text>
+                {(() => {
+                  const sellerReviews = reviews.filter((r) => r.sellerName === sellerName);
+                  if (sellerReviews.length === 0) return null;
+                  const avg = sellerReviews.reduce((sum, r) => sum + r.rating, 0) / sellerReviews.length;
+                  return (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                      <Star size={11} color={theme.gold} fill={theme.gold} />
+                      <Text style={{ color: theme.textSecondary, fontSize: 10, fontWeight: 'bold' }}>
+                        {avg.toFixed(1)} ({sellerReviews.length})
+                      </Text>
+                    </View>
+                  );
+                })()}
+              </View>
 
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
                 <MapPin size={12} color={theme.textSecondary} />
@@ -214,7 +320,7 @@ export default function SellerProfileScreen() {
                   >
                     <Image
                       source={badge.image}
-                      style={{ width: 14, height: 15, resizeMode: 'contain' }}
+                      style={{ width: 36, height: 40, resizeMode: 'contain' }}
                     />
                   </Pressable>
                 ))}
@@ -228,90 +334,396 @@ export default function SellerProfileScreen() {
             <Text style={styles.messageBtnText}>Satıcıya Mesaj Gönder</Text>
           </Pressable>
 
-          {/* Listings List */}
-          <View style={styles.sectionHeader}>
-            <View style={[styles.sectionHeaderLine, { backgroundColor: theme.gold }]} />
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>AKTİF İLANLARI</Text>
-            <View style={[styles.countBadge, { backgroundColor: theme.gold }]}>
-              <Text style={styles.countBadgeText}>{sellerListings.length}</Text>
-            </View>
+          {/* Tab Selector Segment */}
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected, marginTop: 10 }}>
+            <Pressable
+              style={{
+                flex: 1,
+                paddingVertical: 14,
+                alignItems: 'center',
+                borderBottomWidth: 2,
+                borderBottomColor: activeTab === 'listings' ? theme.gold : 'transparent',
+              }}
+              onPress={() => setActiveTab('listings')}
+            >
+              <Text style={{ fontSize: 13, fontWeight: 'bold', color: activeTab === 'listings' ? theme.gold : theme.textSecondary }}>
+                İLANLAR ({sellerListings.length})
+              </Text>
+            </Pressable>
+            <Pressable
+              style={{
+                flex: 1,
+                paddingVertical: 14,
+                alignItems: 'center',
+                borderBottomWidth: 2,
+                borderBottomColor: activeTab === 'reviews' ? theme.gold : 'transparent',
+              }}
+              onPress={() => setActiveTab('reviews')}
+            >
+              {(() => {
+                const sellerReviews = reviews.filter((r) => r.sellerName === sellerName);
+                return (
+                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: activeTab === 'reviews' ? theme.gold : theme.textSecondary }}>
+                    DEĞERLENDİRMELER ({sellerReviews.length})
+                  </Text>
+                );
+              })()}
+            </Pressable>
           </View>
 
-          {sellerListings.length === 0 ? (
-            <View style={{ padding: 30, alignItems: 'center', backgroundColor: cardBg, borderRadius: 12, borderWidth: 1, borderColor: itemBorder }}>
-              <Text style={{ color: theme.textSecondary }}>Bu satıcının aktif ilanı bulunmamaktadır.</Text>
+          {/* Conditional rendering based on activeTab */}
+          {activeTab === 'listings' ? (
+            <View>
+              {sellerListings.length === 0 ? (
+                <View style={{ padding: 40, alignItems: 'center', backgroundColor: cardBg, borderRadius: 12, borderWidth: 1, borderColor: itemBorder, marginTop: 12 }}>
+                  <Text style={{ color: theme.textSecondary }}>Bu satıcının aktif ilanı bulunmamaktadır.</Text>
+                </View>
+              ) : (
+                <View style={[styles.listingsGrid, { marginTop: 12 }]}>
+                  {sellerListings.map((item) => (
+                    <Pressable
+                      key={item.id}
+                      style={({ pressed }) => [
+                        styles.listingItem,
+                        { backgroundColor: itemBg, borderColor: itemBorder },
+                        pressed && { opacity: 0.6 }
+                      ]}
+                      onPress={() => router.push(`/product/${item.id}`)}
+                      hitSlop={10}
+                    >
+                      <Image
+                        source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+                        style={styles.listingThumb}
+                      />
+                      <View style={styles.listingDetails}>
+                        <Text style={[styles.listingTitleText, { color: theme.text }]} numberOfLines={2}>
+                          {item.title}
+                        </Text>
+
+                        <View style={styles.listingMetaRow}>
+                          <Text style={[styles.listingPriceText, { color: isDark ? theme.gold : theme.goldAccent }]}>
+                            {item.price.toLocaleString('tr-TR')} TL
+                          </Text>
+
+                          <View style={[
+                            styles.typeBadge,
+                            {
+                              backgroundColor: item.type === 'auction'
+                                ? 'rgba(255, 107, 0, 0.12)'
+                                : item.type === 'offer'
+                                ? 'rgba(147, 51, 234, 0.12)'
+                                : item.type === 'rent'
+                                ? 'rgba(16, 185, 129, 0.12)'
+                                : 'rgba(59, 130, 246, 0.12)',
+                              borderColor: item.type === 'auction'
+                                ? 'rgba(255, 107, 0, 0.25)'
+                                : item.type === 'offer'
+                                ? 'rgba(147, 51, 234, 0.25)'
+                                : item.type === 'rent'
+                                ? 'rgba(16, 185, 129, 0.25)'
+                                : 'rgba(59, 130, 246, 0.25)'
+                            }
+                          ]}>
+                            <Text style={[
+                              styles.typeBadgeText,
+                              {
+                                color: item.type === 'auction'
+                                  ? theme.gold
+                                  : item.type === 'offer'
+                                  ? '#A855F7'
+                                  : item.type === 'rent'
+                                  ? '#10B981'
+                                  : '#3B82F6'
+                              }
+                            ]}>
+                              {item.type === 'auction' ? 'Mezat' : item.type === 'offer' ? 'Teklifli' : item.type === 'rent' ? 'Kiralık' : 'Sabit Fiyat'}
+                            </Text>
+                          </View>
+                        </View>
+                        {currentUser && (sellerName === currentUser.name || sellerName === currentUser.shopName) && (
+                          <Pressable
+                            style={{
+                              alignSelf: 'flex-start',
+                              backgroundColor: 'rgba(255, 107, 0, 0.1)',
+                              borderColor: theme.gold,
+                              borderWidth: 1,
+                              paddingVertical: 4,
+                              paddingHorizontal: 8,
+                              borderRadius: 4,
+                              marginTop: 6,
+                            }}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              setStoryListingSelect(item);
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.gold }}>
+                              Hikayene Ekle ⚡
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                      <ChevronRight size={18} color={theme.textSecondary} style={{ marginRight: 8 }} />
+                    </Pressable>
+                  ))}
+                </View>
+              )}
             </View>
           ) : (
-            <View style={styles.listingsGrid}>
-              {sellerListings.map((item) => (
-                <Pressable
-                  key={item.id}
-                  style={({ pressed }) => [
-                    styles.listingItem,
-                    { backgroundColor: itemBg, borderColor: itemBorder },
-                    pressed && { opacity: 0.6 }
-                  ]}
-                  onPress={() => router.push(`/product/${item.id}`)}
-                  delayPressIn={0}
-                  hitSlop={10}
-                >
-                  <Image
-                    source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
-                    style={styles.listingThumb}
-                  />
-                  <View style={styles.listingDetails}>
-                    <Text style={[styles.listingTitleText, { color: theme.text }]} numberOfLines={2}>
-                      {item.title}
-                    </Text>
+            <View style={{ gap: 12, marginTop: 12 }}>
+              {(() => {
+                const sellerReviews = reviews.filter((r) => r.sellerName === sellerName);
+                if (sellerReviews.length === 0) {
+                  return (
+                    <View style={{ padding: 40, alignItems: 'center', backgroundColor: cardBg, borderRadius: 12, borderWidth: 1, borderColor: itemBorder }}>
+                      <Text style={{ color: theme.textSecondary }}>Bu satıcı için henüz değerlendirme yapılmamış.</Text>
+                    </View>
+                  );
+                }
 
-                    <View style={styles.listingMetaRow}>
-                      <Text style={[styles.listingPriceText, { color: isDark ? theme.gold : theme.goldAccent }]}>
-                        {item.price.toLocaleString('tr-TR')} TL
-                      </Text>
-
-                      <View style={[
-                        styles.typeBadge,
-                        {
-                          backgroundColor: item.type === 'auction'
-                            ? 'rgba(255, 107, 0, 0.12)'
-                            : item.type === 'offer'
-                            ? 'rgba(147, 51, 234, 0.12)'
-                            : item.type === 'rent'
-                            ? 'rgba(16, 185, 129, 0.12)'
-                            : 'rgba(59, 130, 246, 0.12)',
-                          borderColor: item.type === 'auction'
-                            ? 'rgba(255, 107, 0, 0.25)'
-                            : item.type === 'offer'
-                            ? 'rgba(147, 51, 234, 0.25)'
-                            : item.type === 'rent'
-                            ? 'rgba(16, 185, 129, 0.25)'
-                            : 'rgba(59, 130, 246, 0.25)'
-                        }
-                      ]}>
-                        <Text style={[
-                          styles.typeBadgeText,
-                          {
-                            color: item.type === 'auction'
-                              ? theme.gold
-                              : item.type === 'offer'
-                              ? '#A855F7'
-                              : item.type === 'rent'
-                              ? '#10B981'
-                              : '#3B82F6'
-                          }
-                        ]}>
-                          {item.type === 'auction' ? 'Mezat' : item.type === 'offer' ? 'Teklifli' : item.type === 'rent' ? 'Kiralık' : 'Sabit Fiyat'}
+                // Show reviews list
+                return (
+                  <View style={{ gap: 10 }}>
+                    {sellerReviews.map((rev) => (
+                      <View
+                        key={rev.id}
+                        style={{
+                          backgroundColor: itemBg,
+                          borderColor: itemBorder,
+                          borderWidth: 1,
+                          borderRadius: 10,
+                          padding: 14,
+                          gap: 8,
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Image source={{ uri: rev.authorAvatar }} style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#000' }} />
+                            <View>
+                              <Text style={{ color: theme.text, fontSize: 13, fontWeight: 'bold' }}>{rev.authorName}</Text>
+                              <Text style={{ color: theme.textSecondary, fontSize: 10, marginTop: 1 }}>{rev.createdAt}</Text>
+                            </View>
+                          </View>
+                          {/* Stars */}
+                          <View style={{ flexDirection: 'row', gap: 2 }}>
+                            {Array.from({ length: 5 }).map((_, idx) => (
+                              <Star
+                                key={idx}
+                                size={12}
+                                color={theme.gold}
+                                fill={idx < rev.rating ? theme.gold : 'transparent'}
+                              />
+                            ))}
+                          </View>
+                        </View>
+                        <Text style={{ color: theme.text, fontSize: 12, lineHeight: 17, fontStyle: 'italic' }}>
+                          "{rev.comment}"
                         </Text>
                       </View>
-                    </View>
+                    ))}
                   </View>
-                  <ChevronRight size={18} color={theme.textSecondary} style={{ marginRight: 8 }} />
-                </Pressable>
-              ))}
+                );
+              })()}
             </View>
           )}
         </View>
       </ScrollView>
+
+      {/* Story Viewer Modal */}
+      <Modal
+        visible={storyViewerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStoryViewerVisible(false)}
+      >
+        <View style={styles.storyViewerBackdrop}>
+          {sellerStories.length > 0 && activeStoryIndex < sellerStories.length && (
+            <View style={styles.storyViewerContainer}>
+              {/* Full Screen Media (Image or Video) */}
+              {(() => {
+                const currentStory = sellerStories[activeStoryIndex];
+                const isVideo = currentStory.mediaUrl.toLowerCase().endsWith('.mp4') || 
+                                currentStory.mediaUrl.toLowerCase().endsWith('.mov') ||
+                                currentStory.mediaUrl.includes('.mp4?') ||
+                                currentStory.mediaUrl.includes('.mov?') ||
+                                currentStory.mediaType === 'video';
+                
+                if (isVideo) {
+                  return (
+                    <StoryVideoPlayer 
+                      url={currentStory.mediaUrl} 
+                      isActive={storyViewerVisible} 
+                    />
+                  );
+                }
+                return (
+                  <Image 
+                    source={{ uri: currentStory.mediaUrl }} 
+                    style={styles.storyViewerImage} 
+                  />
+                );
+              })()}
+
+              {/* Progress Indicators Bar */}
+              <View style={styles.storyProgressBarContainer}>
+                {sellerStories.map((st, idx) => {
+                  const isPassed = idx < activeStoryIndex;
+                  const isCurrent = idx === activeStoryIndex;
+                  
+                  return (
+                    <View key={`prog_${idx}`} style={styles.storyProgressBarBackground}>
+                      <RNAnimated.View 
+                        style={[
+                          styles.storyProgressBarFill,
+                          {
+                            backgroundColor: '#FFFFFF',
+                            width: isPassed 
+                              ? '100%' 
+                              : isCurrent 
+                                ? storyProgress.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: ['0%', '100%']
+                                  }) as any
+                                : '0%'
+                          }
+                        ]}
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Header User Info */}
+              <View style={styles.storyViewerHeader}>
+                <Image 
+                  source={{ uri: sellerAvatar }} 
+                  style={styles.storyViewerAvatar} 
+                />
+                <Text style={styles.storyViewerUsername}>
+                  {sellerName}
+                </Text>
+                
+                <Pressable style={styles.storyViewerCloseBtn} onPress={() => setStoryViewerVisible(false)}>
+                  <X size={22} color="#FFFFFF" />
+                </Pressable>
+              </View>
+
+              {/* Bottom Actions */}
+              {sellerStories[activeStoryIndex].productId && (
+                <View style={styles.storyViewerActions}>
+                  <Pressable 
+                    style={[styles.storyViewerBtn, { backgroundColor: 'rgba(255, 85, 0, 0.45)', borderColor: 'rgba(255, 85, 0, 0.6)', borderWidth: 1 }]}
+                    onPress={() => {
+                      const pid = sellerStories[activeStoryIndex].productId;
+                      setStoryViewerVisible(false);
+                      router.push(`/product/${pid}`);
+                    }}
+                  >
+                    <Text style={styles.storyViewerBtnText}>ÜRÜNE GİT</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* Left/Right Tap Areas */}
+              <View style={styles.storyTapContainer}>
+                <Pressable style={styles.storyTapLeft} onPress={handlePrevStory} />
+                <Pressable style={styles.storyTapRight} onPress={handleNextStory} />
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* Listing Photo Selector Modal for Story */}
+      <Modal
+        visible={storyListingSelect !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStoryListingSelect(null)}
+      >
+        <Pressable 
+          style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.6)', justifyContent: 'center', alignItems: 'center' }} 
+          onPress={() => setStoryListingSelect(null)}
+        >
+          <ThemedView 
+            type="backgroundElement" 
+            style={{
+              width: '90%',
+              maxWidth: 380,
+              borderRadius: 16,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: theme.backgroundSelected,
+            }}
+          >
+            <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 6, textAlign: 'center' }}>
+              Hikaye Görseli Seçin
+            </ThemedText>
+            <ThemedText style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 16, textAlign: 'center' }}>
+              İlanınızdaki görsellerden birine tıklayarak hikayenizde paylaşın. Hikayeniz doğrudan bu ürüne bağlanacaktır.
+            </ThemedText>
+            
+            {storyListingSelect && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingVertical: 8 }}>
+                {storyListingSelect.photos.map((photo: any, idx: number) => (
+                  <Pressable
+                    key={idx}
+                    onPress={() => {
+                      let mediaUrlStr = '';
+                      if (typeof photo === 'number') {
+                        try {
+                          const resolved = Image.resolveAssetSource(photo);
+                          mediaUrlStr = resolved.uri;
+                        } catch (e) {
+                          mediaUrlStr = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500';
+                        }
+                      } else {
+                        mediaUrlStr = photo;
+                      }
+
+                      addStory({
+                        sellerId: currentUser?.id || 'demo_seller',
+                        sellerName: currentUser?.name || 'Himmet Akar',
+                        sellerAvatar: currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
+                        mediaUrl: mediaUrlStr,
+                        mediaType: 'image',
+                        productId: storyListingSelect.id,
+                        productTitle: storyListingSelect.title,
+                      });
+                      setStoryListingSelect(null);
+                      Alert.alert("Başarılı", "İlanınızın görseli hikaye olarak paylaşıldı ve ürüne bağlandı! 🚀");
+                    }}
+                    style={{
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      borderWidth: 2,
+                      borderColor: theme.backgroundSelected,
+                    }}
+                  >
+                    <Image
+                      source={typeof photo === 'number' ? photo : { uri: photo }}
+                      style={{ width: 100, height: 120, resizeMode: 'cover' }}
+                    />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+            
+            <Pressable
+              onPress={() => setStoryListingSelect(null)}
+              style={{
+                marginTop: 16,
+                backgroundColor: theme.backgroundSelected,
+                paddingVertical: 10,
+                borderRadius: 8,
+                alignItems: 'center'
+              }}
+            >
+              <ThemedText style={{ fontSize: 13, fontWeight: 'bold' }}>İptal</ThemedText>
+            </Pressable>
+          </ThemedView>
+        </Pressable>
+      </Modal>
     </ThemedView>
   );
 }
@@ -499,5 +911,121 @@ const styles = StyleSheet.create({
   typeBadgeText: {
     fontSize: 9,
     fontWeight: '800',
+  },
+  storyRing: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    padding: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarContainerStory: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    padding: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storyViewerBackdrop: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storyViewerContainer: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+    backgroundColor: '#000000',
+  },
+  storyViewerImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  storyProgressBarContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 36,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    gap: 4,
+    zIndex: 10,
+  },
+  storyProgressBarBackground: {
+    flex: 1,
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 1.5,
+    overflow: 'hidden',
+  },
+  storyProgressBarFill: {
+    height: '100%',
+  },
+  storyViewerHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 76 : 52,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  storyViewerAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    marginRight: 10,
+  },
+  storyViewerUsername: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    flex: 1,
+  },
+  storyViewerCloseBtn: {
+    padding: 4,
+  },
+  storyTapContainer: {
+    position: 'absolute',
+    top: 100,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+  },
+  storyTapLeft: {
+    width: '30%',
+    height: '100%',
+  },
+  storyTapRight: {
+    width: '70%',
+    height: '100%',
+  },
+  storyViewerActions: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    zIndex: 20,
+  },
+  storyViewerBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storyViewerBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 12,
   },
 });

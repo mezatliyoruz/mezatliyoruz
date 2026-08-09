@@ -42,7 +42,8 @@
           "photosPermission": "Uygulama ilan eklemeniz için fotoğraf seçme izni istiyor.",
           "cameraPermission": "Uygulama ilan eklemeniz için kamera izni istiyor."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

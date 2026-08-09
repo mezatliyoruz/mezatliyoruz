@@ -18,6 +18,7 @@ import {
   Animated as RNAnimated,
   LogBox,
   Alert,
+  Switch,
 } from 'react-native';
 
 LogBox.ignoreAllLogs(); // Hide warning notifications on the emulator screen
@@ -25,7 +26,13 @@ import { useRouter, useNavigation } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppStore, Listing, defaultCollage, Story } from '@/services/store';
 import VideoPlayer from '@/features/feed/components/VideoPlayer';
+import { VideoCacheManager } from '@/services/video-cache';
 import { RENTAL_SUB_CATEGORIES } from './create';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import CategoryBadge from '@/components/category-badge';
+import * as LocalAuthentication from 'expo-local-authentication';
+
+
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -41,6 +48,7 @@ import {
   Clock,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   X,
   Search,
   Bell,
@@ -66,7 +74,12 @@ import {
   SlidersHorizontal,
   Store,
   Briefcase,
+  Upload,
+  FileText,
+  GitCompare,
 } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { formatTime } from '@/utils/time';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -220,6 +233,31 @@ const getSellerBadges = (item: Listing) => {
   return badges;
 };
 
+function StoryVideoPlayer({ url, isActive }: { url: string; isActive: boolean }) {
+  const player = useVideoPlayer(url, (p) => {
+    p.loop = false;
+    p.muted = false;
+  });
+
+  useEffect(() => {
+    if (isActive) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [isActive, player]);
+
+  return (
+    <VideoView
+      player={player}
+      style={{ width: '100%', height: '100%', minHeight: 300 }}
+      nativeControls={false}
+      contentFit="contain"
+    />
+  );
+}
+
+
 export default function HomeScreen() {
   const router = useRouter();
   const navigation = useNavigation();
@@ -228,6 +266,7 @@ export default function HomeScreen() {
   const isDesktop = windowWidth > 768;
   const scheme = useColorScheme();
   const theme = Colors[scheme === 'dark' ? 'dark' : 'light'];
+  const isDark = scheme === 'dark';
 
   const { 
     listings, 
@@ -252,7 +291,18 @@ export default function HomeScreen() {
     loadCMSData,
     stories,
     addStory,
+    notifications,
+    markNotificationAsRead,
+    clearNotifications,
+    sendSystemNotificationToAll,
+    serverValidateUploadedFile,
+    isBiometricsEnabled,
+    compareList,
+    removeFromCompareList,
+    clearCompareList,
   } = useAppStore();
+
+  const [compareModalVisible, setCompareModalVisible] = useState(false);
 
   // Home states
   const [searchQuery, setSearchQuery] = useState('');
@@ -264,6 +314,17 @@ export default function HomeScreen() {
   useEffect(() => {
     setVisibleReelsLimit(15);
   }, [searchQuery, selectedCategory, selectedSubCategory]);
+
+  // Prefetch video caching in background
+  useEffect(() => {
+    const videoUrls = listings
+      .filter((l) => l.videoUrl)
+      .map((l) => (typeof l.videoUrl === 'string' ? l.videoUrl : ''))
+      .filter((url) => url !== '');
+    if (videoUrls.length > 0) {
+      VideoCacheManager.prefetchVideos(videoUrls);
+    }
+  }, [listings]);
 
   const loadMoreReels = () => {
     if (visibleReelsLimit < filteredReelsProducts.length) {
@@ -283,6 +344,7 @@ export default function HomeScreen() {
   const reelsFlatListRef = useRef<FlatList>(null);
   const [reelsFiltersVisible, setReelsFiltersVisible] = useState(false);
   const [reelsSelectedCity, setReelsSelectedCity] = useState<string | null>(null);
+  const [reelsCityPickerVisible, setReelsCityPickerVisible] = useState(false);
   const [reelsSelectedType, setReelsSelectedType] = useState<string | null>(null);
   const [reelsSelectedCategory, setReelsSelectedCategory] = useState<string | null>(null);
   const [reelsMinPrice, setReelsMinPrice] = useState<string>('');
@@ -292,15 +354,100 @@ export default function HomeScreen() {
   // Feed specific filters state
   const [feedFiltersVisible, setFeedFiltersVisible] = useState(false);
   const [feedSelectedCity, setFeedSelectedCity] = useState<string | null>(null);
+  const [feedCityPickerVisible, setFeedCityPickerVisible] = useState(false);
   const [feedMinPrice, setFeedMinPrice] = useState<string>('');
   const [feedMaxPrice, setFeedMaxPrice] = useState<string>('');
   const [feedSortBy, setFeedSortBy] = useState<string>('default');
+  const [feedNearbyOnly, setFeedNearbyOnly] = useState(false);
+  const [feedMaxDistance, setFeedMaxDistance] = useState<number>(25);
+  const [mapModalVisible, setMapModalVisible] = useState(false);
+
+  // Feed Category Specific Filters
+  const [feedMinKm, setFeedMinKm] = useState('');
+  const [feedMaxKm, setFeedMaxKm] = useState('');
+  const [feedMinYear, setFeedMinYear] = useState('');
+  const [feedMaxYear, setFeedMaxYear] = useState('');
+  const [feedTransmission, setFeedTransmission] = useState<'all' | 'Manuel' | 'Otomatik'>('all');
+  const [feedMinSqm, setFeedMinSqm] = useState('');
+  const [feedMaxSqm, setFeedMaxSqm] = useState('');
+  const [feedRooms, setFeedRooms] = useState<string[]>([]);
 
  
   // Stories State
   const [shareStoryModalVisible, setShareStoryModalVisible] = useState(false);
   const [newStoryImageUrl, setNewStoryImageUrl] = useState('');
-  const [newStoryProductId, setNewStoryProductId] = useState('');
+  const [storyUploading, setStoryUploading] = useState(false);
+  const [storyUploadProgress, setStoryUploadProgress] = useState(0);
+  const [storyMediaType, setStoryMediaType] = useState<'image' | 'video'>('image');
+  const [selectedStoryProduct, setSelectedStoryProduct] = useState<Listing | null>(null);
+  const [storyProductPickerVisible, setStoryProductPickerVisible] = useState(false);
+
+  const handlePickStoryMedia = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        alert('Dosya seçebilmek için galeri izni vermeniz gerekmektedir.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        const fileName = asset.fileName || asset.uri.substring(asset.uri.lastIndexOf('/') + 1) || 'story.jpg';
+        const fileSize = asset.fileSize || 0;
+        const mimeType = asset.mimeType;
+
+        // Secure Server-side check
+        const validation = serverValidateUploadedFile(fileName, fileSize, mimeType);
+        if (!validation.success) {
+          Alert.alert("Güvenlik Engeli", validation.error || "Desteklenmeyen dosya.");
+          return;
+        }
+
+        const isVideo = asset.type === 'video' || (asset.mimeType && asset.mimeType.startsWith('video/')) || asset.uri.endsWith('.mp4');
+        
+        setStoryUploading(true);
+        setStoryUploadProgress(0);
+        setStoryMediaType(isVideo ? 'video' : 'image');
+
+        let progress = 0;
+        const interval = setInterval(() => {
+          progress += 20;
+          setStoryUploadProgress(progress);
+          if (progress >= 100) {
+            clearInterval(interval);
+            setNewStoryImageUrl(asset.uri);
+            setStoryUploading(false);
+            if (isVideo) {
+              alert('Video başarıyla yüklendi! Hikaye süresi 8 saniye olarak ayarlanacaktır.');
+            }
+          }
+        }, 150);
+      }
+    } catch (err) {
+      console.warn('Story media picking error:', err);
+      setStoryUploading(true);
+      setStoryUploadProgress(0);
+      setStoryMediaType('image');
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += 25;
+        setStoryUploadProgress(progress);
+        if (progress >= 100) {
+          clearInterval(interval);
+          setNewStoryImageUrl('https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500');
+          setStoryUploading(false);
+          alert('Dosya yükleme simülasyonu tamamlandı.');
+        }
+      }, 100);
+    }
+  };
+
   const [storyViewerVisible, setStoryViewerVisible] = useState(false);
   const [activeStoryList, setActiveStoryList] = useState<Story[]>([]);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
@@ -334,6 +481,15 @@ export default function HomeScreen() {
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'shipping' | 'payment' | 'success'>('cart');
   const [toastMessage, setToastMessage] = useState('');
   const [cartAnimationItem, setCartAnimationItem] = useState<Listing | null>(null);
+  
+  // Notifications state
+  const [notificationModalVisible, setNotificationModalVisible] = useState(false);
+  const [adminNotifTitle, setAdminNotifTitle] = useState('');
+  const [adminNotifMessage, setAdminNotifMessage] = useState('');
+  const userNotifications = (notifications || []).filter(
+    (n) => n.userId === 'all' || (currentUser && n.userId === currentUser.id)
+  );
+  const unreadNotificationsCount = userNotifications.filter((n) => !n.isRead).length;
   
   // Shipping Form
   const [shippingName, setShippingName] = useState('');
@@ -544,13 +700,31 @@ export default function HomeScreen() {
   }).current;
 
   // Handles bidding
-  const handlePlaceBid = () => {
+  const handlePlaceBid = async () => {
     if (!selectedListing) return;
     const amount = parseFloat(bidAmount);
     if (isNaN(amount) || amount <= 0) {
       setBidError('Lütfen geçerli bir teklif girin.');
       return;
     }
+
+    if (isBiometricsEnabled) {
+      try {
+        const authResult = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Teklifinizi onaylamak için kimliğinizi doğrulayın.',
+          fallbackLabel: 'Şifre Kullan',
+        });
+        if (!authResult.success) {
+          setBidError('Biyometrik doğrulama başarısız oldu. Teklif gönderilmedi.');
+          return;
+        }
+      } catch (err) {
+        console.warn('Biometrics auth failed:', err);
+        setBidError('Güvenlik doğrulamasında bir hata oldu.');
+        return;
+      }
+    }
+
     const result = placeBid(selectedListing.id, amount);
     if (result.success) {
       setBidModalVisible(false);
@@ -581,9 +755,29 @@ export default function HomeScreen() {
     }
   };
 
+  // Mock User Location (Istanbul center)
+  const USER_LATITUDE = 41.0082;
+  const USER_LONGITUDE = 28.9784;
+
+  const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
   // Filter listings based on search, section (Level 1), and sub-category (Level 2)
   // Filter listings based on search, section (Level 1), sub-category (Level 2), and feed filters (City, Price, Sort)
   let filteredListings = listings.filter((item) => {
+    if (feedNearbyOnly) {
+      if (item.latitude === undefined || item.longitude === undefined) return false;
+      const dist = getDistance(USER_LATITUDE, USER_LONGITUDE, item.latitude, item.longitude);
+      if (dist > feedMaxDistance) return false;
+    }
     if (item.status === 'pending_approval' || item.status === 'rejected') {
       return false;
     }
@@ -616,8 +810,14 @@ export default function HomeScreen() {
     }
     
     if (selectedCategory === 'Bit Pazarı') {
-      // Must not be an auction
-      if (item.type === 'auction') return false;
+      // Exclude auctions, rentals, real estate, and vehicle listings
+      if (item.type === 'auction' || item.type === 'rent') return false;
+      if (item.isRealEstate || item.isVehicle) return false;
+      
+      // Must be a flea market compatible category
+      const isFleaItem = bitPazariSubCategories.some(fc => fc !== 'Hepsi' && matchesSubCategory(item, fc)) ||
+        ['Giyim & Aksesuar', 'Elektronik', 'Ev & Yaşam', 'Antika & Koleksiyon', 'Koleksiyon & Antika', 'Kitap & Hobi', 'Diğer', 'Genel'].includes(item.category);
+      if (!isFleaItem) return false;
       
       // Level 2 Sub-category Filter
       if (selectedSubCategory) {
@@ -627,8 +827,9 @@ export default function HomeScreen() {
     }
     
     if (selectedCategory === 'Üreticiden Tüketiciye') {
-      // Must not be an auction, and must be a producer product
-      if (item.type === 'auction') return false;
+      // Exclude auctions, rentals, real estate, and vehicle listings
+      if (item.type === 'auction' || item.type === 'rent') return false;
+      if (item.isRealEstate || item.isVehicle) return false;
       
       const isProducerProduct = 
         item.verifiedProduct === true || 
@@ -643,6 +844,28 @@ export default function HomeScreen() {
         return matchesSubCategory(item, selectedSubCategory);
       }
       return true;
+    }
+
+    // Category Specific filters: Vasıta (Otomobil)
+    if (item.isVehicle || (item.category && item.category.includes('Otomobil'))) {
+      const itemKm = item.km || 0;
+      const itemYear = item.year || 0;
+      
+      if (feedMinKm && itemKm < parseInt(feedMinKm)) return false;
+      if (feedMaxKm && itemKm > parseInt(feedMaxKm)) return false;
+      if (feedMinYear && itemYear < parseInt(feedMinYear)) return false;
+      if (feedMaxYear && itemYear > parseInt(feedMaxYear)) return false;
+      if (feedTransmission !== 'all' && item.transmission !== feedTransmission) return false;
+    }
+
+    // Category Specific filters: Emlak
+    if (item.isRealEstate || (item.category && item.category.includes('Emlak'))) {
+      const itemSqm = item.sqm || 0;
+      const itemRooms = item.rooms || '';
+      
+      if (feedMinSqm && itemSqm < parseInt(feedMinSqm)) return false;
+      if (feedMaxSqm && itemSqm > parseInt(feedMaxSqm)) return false;
+      if (feedRooms.length > 0 && !feedRooms.includes(itemRooms)) return false;
     }
 
     // Default: 'Hepsi' (selectedCategory === null) - show all items mixed
@@ -701,13 +924,21 @@ export default function HomeScreen() {
     if (reelsSelectedCategory) {
       let matchesCat = false;
       if (reelsSelectedCategory === 'Bit Pazarı') {
-        matchesCat = item.type !== 'auction';
+        if (item.type === 'auction' || item.type === 'rent') matchesCat = false;
+        else if (item.isRealEstate || item.isVehicle) matchesCat = false;
+        else {
+          matchesCat = bitPazariSubCategories.some(fc => fc !== 'Hepsi' && matchesSubCategory(item, fc)) ||
+            ['Giyim & Aksesuar', 'Elektronik', 'Ev & Yaşam', 'Antika & Koleksiyon', 'Koleksiyon & Antika', 'Kitap & Hobi', 'Diğer', 'Genel'].includes(item.category);
+        }
       } else if (reelsSelectedCategory === 'Üreticiden Tüketiciye') {
-        matchesCat = item.type !== 'auction' && (
-          item.verifiedProduct === true ||
-          ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
-          ureticidenSubCategories.includes(item.category)
-        );
+        if (item.type === 'auction' || item.type === 'rent') matchesCat = false;
+        else if (item.isRealEstate || item.isVehicle) matchesCat = false;
+        else {
+          matchesCat = 
+            item.verifiedProduct === true ||
+            ['El Yapımı', 'Mutfak', 'Doğal Gıda', 'El Emeği & Sanat', 'Doğal Kozmetik', 'Tasarım Giyim', 'Bahçe & Tarım'].includes(item.category) ||
+            ureticidenSubCategories.includes(item.category);
+        }
       } else if (reelsSelectedCategory === 'Sat / Kirala') {
         matchesCat = item.isRealEstate || item.isVehicle || [
           '🏠 Emlak', '🚗 Otomobil', '🔑 Kurumsal Oto Kiralama (Rent a Car)', 'Onaylı Rent a Car',
@@ -905,7 +1136,13 @@ export default function HomeScreen() {
 
           <Pressable
             style={[styles.iconButton, styles.gavelButton]}
-            onPress={() => handleAddToCart(item)}
+            onPress={() => {
+              if (item.type === 'fixed') {
+                addToCart(item.id);
+              }
+              setCheckoutStep('cart');
+              setCartModalVisible(true);
+            }}
           >
             <ShoppingCart size={26} color="#FF6B00" />
           </Pressable>
@@ -925,7 +1162,7 @@ export default function HomeScreen() {
         </View>
 
         {/* Bottom Details Overlay */}
-        <View style={styles.bottomOverlay}>
+        <View style={[styles.bottomOverlay, { paddingBottom: Math.max(28, insets.bottom + 16) }]}>
           <View style={styles.sellerRow}>
             <Pressable
               onPress={() => {
@@ -934,7 +1171,6 @@ export default function HomeScreen() {
                   router.push(`/seller/${encodeURIComponent(item.sellerName)}`);
                 }, 150);
               }}
-              delayPressIn={0}
               hitSlop={15}
               style={({ pressed }) => [
                 { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
@@ -943,7 +1179,7 @@ export default function HomeScreen() {
             >
               <Image source={{ uri: item.sellerAvatar }} style={styles.sellerAvatar} />
               <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                   <ThemedText style={styles.sellerName}>{item.sellerName}</ThemedText>
                   {(() => {
                     if (!item.sellerVerified) return null;
@@ -958,7 +1194,7 @@ export default function HomeScreen() {
                       >
                         <Image
                           source={badge.image}
-                          style={{ width: 11, height: 12, resizeMode: 'contain' }}
+                          style={{ width: 16, height: 18, resizeMode: 'contain' }}
                         />
                       </Pressable>
                     ));
@@ -968,7 +1204,10 @@ export default function HomeScreen() {
                   <ThemedText style={styles.sellerScore}>Güven Skoru: {item.sellerTrustScore}/10</ThemedText>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
                     <MapPin size={11} color="#94A3B8" />
-                    <Text style={{ color: '#94A3B8', fontSize: 10, fontWeight: '600' }}>{item.city || 'İstanbul'}</Text>
+                    <Text style={{ color: '#94A3B8', fontSize: 10, fontWeight: '600' }}>
+                      {item.city || 'İstanbul'}
+                      {item.latitude !== undefined && item.longitude !== undefined ? ` (${getDistance(USER_LATITUDE, USER_LONGITUDE, item.latitude, item.longitude).toFixed(0)} km)` : ''}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -982,6 +1221,7 @@ export default function HomeScreen() {
             )}
           </View>
 
+          <CategoryBadge item={item} style={{ marginBottom: 6, alignSelf: 'flex-start' }} />
           <ThemedText style={styles.listingTitle}>{item.title}</ThemedText>
           <ThemedText style={styles.listingDesc} numberOfLines={2}>
             {item.description}
@@ -995,18 +1235,41 @@ export default function HomeScreen() {
               <ThemedText style={styles.priceValue}>{item.price.toLocaleString('tr-TR')} TL</ThemedText>
             </View>
 
-            <Pressable
-              style={styles.ctaButton}
-              onPress={() => {
-                setActiveReelsIndex(null);
-                setTimeout(() => {
-                  router.push(`/product/${item.id}`);
-                }, 150);
-              }}
-            >
-              <ThemedText style={styles.ctaButtonText}>Detayları Gör</ThemedText>
-              <ChevronRight size={16} color="#0B132B" />
-            </Pressable>
+            {item.type === 'fixed' ? (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable
+                  style={[styles.reelsAddToCartBtn, { backgroundColor: '#FF5500' }]}
+                  onPress={() => handleAddToCart(item)}
+                >
+                  <Text style={styles.reelsAddToCartBtnText}>Sepete Ekle</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                  onPress={() => {
+                    addToCart(item.id);
+                    setCheckoutStep('cart');
+                    setCartModalVisible(true);
+                  }}
+                >
+                  <Text style={styles.ctaButtonText}>Hemen Al</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                style={styles.ctaButton}
+                onPress={() => {
+                  setActiveReelsIndex(null);
+                  setTimeout(() => {
+                    router.push(`/product/${item.id}`);
+                  }, 150);
+                }}
+              >
+                <ThemedText style={styles.ctaButtonText}>
+                  {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
+                </ThemedText>
+                <ChevronRight size={16} color="#0B132B" />
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -1033,7 +1296,7 @@ export default function HomeScreen() {
           <Play size={10} color="#FFFFFF" fill="#FFFFFF" />
         </View>
 
-        {/* Type Badge */}
+        {/* Type Badge (Reels Style) */}
         <View
           style={[
             styles.collageTypeBadge,
@@ -1043,12 +1306,14 @@ export default function HomeScreen() {
                   ? 'rgba(255, 107, 0, 0.85)'
                   : item.type === 'offer'
                   ? 'rgba(147, 51, 234, 0.85)'
+                  : item.type === 'rent'
+                  ? 'rgba(139, 92, 246, 0.85)'
                   : 'rgba(37, 99, 235, 0.85)',
             },
           ]}
         >
           <Text style={styles.collageTypeBadgeText}>
-            {item.type === 'auction' ? 'MEZAT' : item.type === 'offer' ? 'TEKLİF' : 'SABİT'}
+            {item.type === 'auction' ? 'MEZAT' : item.type === 'offer' ? 'TEKLİF' : item.type === 'rent' ? 'KİRALIK' : 'SABİT'}
           </Text>
         </View>
 
@@ -1220,7 +1485,7 @@ export default function HomeScreen() {
 
   const handleShareStory = () => {
     if (!newStoryImageUrl || newStoryImageUrl.trim() === '') {
-      alert('Lütfen geçerli bir görsel adresi girin.');
+      alert('Lütfen bir görsel veya video ekleyin.');
       return;
     }
     if (!currentUser) return;
@@ -1230,11 +1495,13 @@ export default function HomeScreen() {
       sellerName: currentUser.shopName || currentUser.name,
       sellerAvatar: currentUser.avatar,
       mediaUrl: newStoryImageUrl.trim(),
-      productId: newStoryProductId.trim() !== '' ? newStoryProductId.trim() : undefined,
+      mediaType: storyMediaType,
+      productId: selectedStoryProduct ? selectedStoryProduct.id : undefined,
+      productTitle: selectedStoryProduct ? selectedStoryProduct.title : undefined,
     });
     
     setNewStoryImageUrl('');
-    setNewStoryProductId('');
+    setSelectedStoryProduct(null);
     setShareStoryModalVisible(false);
     alert('Hikayeniz başarıyla paylaşıldı! 24 saat sonra yayından kalkacaktır.');
   };
@@ -1301,17 +1568,73 @@ export default function HomeScreen() {
 
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      {/* 1. ANNOUNCEMENT BAR */}
-      <Pressable 
-        style={[styles.announcementBar, { backgroundColor: theme.gold }]}
-        onPress={() => router.push('/featured-auction')}
-      >
-        <Sparkles size={14} color="#FFFFFF" />
-        <Text style={[styles.announcementText, { color: '#FFFFFF' }]} numberOfLines={1}>
-          Bugün 12:00'da koleksiyon araç mezatı başlıyor! Detayları Gör
-        </Text>
-        <ChevronRight size={14} color="#FFFFFF" />
-      </Pressable>
+      {/* 1. ANNOUNCEMENT BAR WITH CART & NOTIFICATION ICONS */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.gold, paddingRight: 12 }}>
+        <Pressable 
+          style={[styles.announcementBar, { backgroundColor: theme.gold, flex: 1, borderBottomWidth: 0, paddingRight: 4 }]}
+          onPress={() => router.push('/featured-auction')}
+        >
+          <Sparkles size={14} color="#FFFFFF" />
+          <Text style={[styles.announcementText, { color: '#FFFFFF' }]} numberOfLines={1}>
+            Bugün 12:00'da koleksiyon araç mezatı başlıyor! Detayları Gör
+          </Text>
+          <ChevronRight size={14} color="#FFFFFF" />
+        </Pressable>
+
+        {/* Sepet (Cart) ve Bildirim (Notification) İkonları */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          {/* Notification Button */}
+          <Pressable 
+            style={{ position: 'relative', padding: 4 }}
+            onPress={() => setNotificationModalVisible(true)}
+          >
+            {unreadNotificationsCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                backgroundColor: '#FF3B30',
+                borderRadius: 6,
+                minWidth: 12,
+                height: 12,
+                justifyContent: 'center',
+                alignItems: 'center',
+                zIndex: 10,
+              }}>
+                <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{unreadNotificationsCount}</Text>
+              </View>
+            )}
+            <Bell size={18} color="#FFFFFF" />
+          </Pressable>
+
+          {/* Cart Button */}
+          <Pressable 
+            style={{ position: 'relative', padding: 4 }}
+            onPress={() => {
+              setCheckoutStep('cart');
+              setCartModalVisible(true);
+            }}
+          >
+            {cartCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                backgroundColor: '#FF3B30',
+                borderRadius: 6,
+                minWidth: 12,
+                height: 12,
+                justifyContent: 'center',
+                alignItems: 'center',
+                zIndex: 10,
+              }}>
+                <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{cartCount}</Text>
+              </View>
+            )}
+            <ShoppingCart size={18} color="#FFFFFF" />
+          </Pressable>
+        </View>
+      </View>
 
       {/* STORIES FEATURE ROW (Moved below logo header) */}
       {!searchQuery && (
@@ -1637,6 +1960,26 @@ export default function HomeScreen() {
                   Filtrele {!!(feedSelectedCity || feedMinPrice || feedMaxPrice || feedSortBy !== 'default') ? `(${[!!feedSelectedCity, !!feedMinPrice, !!feedMaxPrice, feedSortBy !== 'default'].filter(Boolean).length})` : ''}
                 </Text>
               </Pressable>
+
+              <Pressable 
+                style={{ 
+                  flexDirection: 'row', 
+                  alignItems: 'center', 
+                  gap: 6, 
+                  backgroundColor: theme.backgroundElement,
+                  paddingVertical: 6,
+                  paddingHorizontal: 10,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: theme.backgroundSelected
+                }}
+                onPress={() => setMapModalVisible(true)}
+              >
+                <MapPin size={13} color={theme.gold} />
+                <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>
+                  Haritada Gör
+                </Text>
+              </Pressable>
             </View>
           </View>
  
@@ -1756,35 +2099,26 @@ export default function HomeScreen() {
               {/* Şehir Seçimi */}
               <View style={styles.filterSection}>
                 <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Şehir Seçin (Letgo Tarzı)</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-                  <Pressable
-                    style={[
-                      styles.filterBadge,
-                      { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                      reelsSelectedCity === null && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
-                    ]}
-                    onPress={() => setReelsSelectedCity(null)}
-                  >
-                    <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, reelsSelectedCity === null && { color: theme.gold, fontWeight: '700' }]}>
-                      Tüm Türkiye
-                    </Text>
-                  </Pressable>
-                  {['İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => (
-                    <Pressable
-                      key={c}
-                      style={[
-                        styles.filterBadge,
-                        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        reelsSelectedCity === c && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
-                      ]}
-                      onPress={() => setReelsSelectedCity(c)}
-                    >
-                      <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, reelsSelectedCity === c && { color: theme.gold, fontWeight: '700' }]}>
-                        {c}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                <Pressable
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    backgroundColor: theme.backgroundElement,
+                    borderColor: theme.backgroundSelected,
+                    borderWidth: 1,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    marginTop: 4,
+                  }}
+                  onPress={() => setReelsCityPickerVisible(true)}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>
+                    {reelsSelectedCity || 'Tüm Türkiye'}
+                  </Text>
+                  <ChevronDown size={18} color={theme.textSecondary} />
+                </Pressable>
               </View>
 
               {/* Ürün Türü */}
@@ -1936,35 +2270,26 @@ export default function HomeScreen() {
               {/* Şehir Seçimi */}
               <View style={styles.filterSection}>
                 <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Şehir Seçin</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-                  <Pressable
-                    style={[
-                      styles.filterBadge,
-                      { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                      feedSelectedCity === null && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
-                    ]}
-                    onPress={() => setFeedSelectedCity(null)}
-                  >
-                    <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, feedSelectedCity === null && { color: theme.gold, fontWeight: '700' }]}>
-                      Tüm Türkiye
-                    </Text>
-                  </Pressable>
-                  {['İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => (
-                    <Pressable
-                      key={c}
-                      style={[
-                        styles.filterBadge,
-                        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        feedSelectedCity === c && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
-                      ]}
-                      onPress={() => setFeedSelectedCity(c)}
-                    >
-                      <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, feedSelectedCity === c && { color: theme.gold, fontWeight: '700' }]}>
-                        {c}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
+                <Pressable
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    backgroundColor: theme.backgroundElement,
+                    borderColor: theme.backgroundSelected,
+                    borderWidth: 1,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    marginTop: 4,
+                  }}
+                  onPress={() => setFeedCityPickerVisible(true)}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>
+                    {feedSelectedCity || 'Tüm Türkiye'}
+                  </Text>
+                  <ChevronDown size={18} color={theme.textSecondary} />
+                </Pressable>
               </View>
  
               {/* Fiyat Aralığı */}
@@ -1990,7 +2315,141 @@ export default function HomeScreen() {
                   />
                 </View>
               </View>
- 
+
+              {/* Kategoriye Özel Filtreler: Vasıta */}
+              {(selectedCategory === '🚗 Otomobil' || selectedCategory === 'Sat / Kirala') && (
+                <View style={{ gap: 16, marginTop: 12 }}>
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Kilometre Aralığı</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min KM"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMinKm}
+                        onChangeText={setFeedMinKm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks KM"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMaxKm}
+                        onChangeText={setFeedMaxKm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Model Yılı Aralığı</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min Yıl"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMinYear}
+                        onChangeText={setFeedMinYear}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks Yıl"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMaxYear}
+                        onChangeText={setFeedMaxYear}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Vites Tipi</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      {[
+                        { id: 'all', label: 'Tümü' },
+                        { id: 'Manuel', label: 'Manuel' },
+                        { id: 'Otomatik', label: 'Otomatik' }
+                      ].map((v) => (
+                        <Pressable
+                          key={v.id}
+                          style={[
+                            styles.filterBadge,
+                            { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                            feedTransmission === v.id && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
+                          ]}
+                          onPress={() => setFeedTransmission(v.id as any)}
+                        >
+                          <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, feedTransmission === v.id && { color: theme.gold, fontWeight: '700' }]}>
+                            {v.label}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Kategoriye Özel Filtreler: Emlak */}
+              {(selectedCategory === '🏠 Emlak' || selectedCategory === 'Sat / Kirala') && (
+                <View style={{ gap: 16, marginTop: 12 }}>
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Metrekare (m²)</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <TextInput
+                        placeholder="Min m²"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMinSqm}
+                        onChangeText={setFeedMinSqm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                      <Text style={{ color: theme.textSecondary }}>-</Text>
+                      <TextInput
+                        placeholder="Maks m²"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={feedMaxSqm}
+                        onChangeText={setFeedMaxSqm}
+                        style={[styles.filterPriceInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.filterSection}>
+                    <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Oda Sayısı</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {['1+1', '2+1', '3+1', '4+1+'].map((r) => {
+                        const isSelected = feedRooms.includes(r);
+                        return (
+                          <Pressable
+                            key={r}
+                            style={[
+                              styles.filterBadge,
+                              { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                              isSelected && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
+                            ]}
+                            onPress={() => {
+                              if (isSelected) {
+                                setFeedRooms(prev => prev.filter(x => x !== r));
+                              } else {
+                                setFeedRooms(prev => [...prev, r]);
+                              }
+                            }}
+                          >
+                            <Text style={[styles.filterBadgeText, { color: theme.textSecondary }, isSelected && { color: theme.gold, fontWeight: '700' }]}>
+                              {r}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </View>
+              )}
+
               {/* Sıralama */}
               <View style={styles.filterSection}>
                 <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Sıralama Kriteri</Text>
@@ -2017,6 +2476,47 @@ export default function HomeScreen() {
                   ))}
                 </View>
               </View>
+
+              {/* Konum ve Mesafe Filtresi */}
+              <View style={styles.filterSection}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={[styles.filterSectionTitle, { color: theme.text }]}>Yakınımda Ara 📍</Text>
+                  <Switch
+                    value={feedNearbyOnly}
+                    onValueChange={setFeedNearbyOnly}
+                    trackColor={{ false: scheme === 'dark' ? '#1E293B' : '#E2E8F0', true: theme.gold }}
+                    thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
+                  />
+                </View>
+                {feedNearbyOnly && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={{ color: theme.textSecondary, fontSize: 12, marginBottom: 8 }}>
+                      Maksimum Mesafe: <Text style={{ color: theme.gold, fontWeight: 'bold' }}>{feedMaxDistance} km</Text>
+                    </Text>
+                    {/* Visual Slider Simulation for distances */}
+                    <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                      {[5, 10, 25, 50, 100].map((dist) => (
+                        <Pressable
+                          key={dist}
+                          style={{
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            borderRadius: 16,
+                            borderWidth: 1,
+                            borderColor: feedMaxDistance === dist ? theme.gold : theme.backgroundSelected,
+                            backgroundColor: feedMaxDistance === dist ? 'rgba(255, 85, 0, 0.15)' : 'transparent',
+                          }}
+                          onPress={() => setFeedMaxDistance(dist)}
+                        >
+                          <Text style={{ fontSize: 11, color: feedMaxDistance === dist ? theme.gold : theme.textSecondary, fontWeight: feedMaxDistance === dist ? 'bold' : 'normal' }}>
+                            {dist} km
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
             </ScrollView>
  
             {/* Footer Buttons */}
@@ -2028,6 +2528,16 @@ export default function HomeScreen() {
                   setFeedMinPrice('');
                   setFeedMaxPrice('');
                   setFeedSortBy('default');
+                  setFeedNearbyOnly(false);
+                  setFeedMaxDistance(25);
+                  setFeedMinKm('');
+                  setFeedMaxKm('');
+                  setFeedMinYear('');
+                  setFeedMaxYear('');
+                  setFeedTransmission('all');
+                  setFeedMinSqm('');
+                  setFeedMaxSqm('');
+                  setFeedRooms([]);
                 }}
               >
                 <Text style={{ color: theme.text, fontWeight: '700' }}>Sıfırla</Text>
@@ -2043,7 +2553,428 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-        {/* Bid / Offer Modal */}
+      {/* SIMULATED INTERACTIVE MAP VIEW MODAL */}
+      <Modal
+        visible={mapModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMapModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <ThemedView type="backgroundElement" style={{ width: '92%', height: '80%', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: theme.gold }}>
+            {/* Map Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected }}>
+              <View>
+                <Text style={{ color: theme.text, fontSize: 16, fontWeight: 'bold' }}>İnteraktif Çevre Haritası</Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 11, marginTop: 2 }}>📍 İstanbul Merkez (Senin Konumun)</Text>
+              </View>
+              <Pressable style={{ padding: 4 }} onPress={() => setMapModalVisible(false)}>
+                <X size={20} color={theme.text} />
+              </Pressable>
+            </View>
+
+            {/* Map Distance Quick Filter */}
+            <View style={{ flexDirection: 'row', gap: 6, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: scheme === 'dark' ? 'rgba(255,255,255,0.02)' : '#F8FAFC', borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected }}>
+              <Text style={{ fontSize: 11, color: theme.textSecondary, alignSelf: 'center', marginRight: 6 }}>Mesafe:</Text>
+              {[10, 25, 50, 150].map((dist) => (
+                <Pressable
+                  key={dist}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: feedMaxDistance === dist ? theme.gold : theme.backgroundSelected,
+                    backgroundColor: feedMaxDistance === dist ? 'rgba(255, 85, 0, 0.15)' : 'transparent',
+                  }}
+                  onPress={() => setFeedMaxDistance(dist)}
+                >
+                  <Text style={{ fontSize: 10, color: feedMaxDistance === dist ? theme.gold : theme.textSecondary, fontWeight: feedMaxDistance === dist ? 'bold' : 'normal' }}>
+                    {dist} km
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {/* Stylized Simulated Map Grid Canvas */}
+            <View style={{ flex: 1, backgroundColor: '#090F1E', position: 'relative', overflow: 'hidden' }}>
+              {/* Map grid lines simulation */}
+              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.15 }}>
+                {/* Horizontal lines */}
+                {Array.from({ length: 15 }).map((_, i) => (
+                  <View key={`h-${i}`} style={{ position: 'absolute', left: 0, right: 0, top: i * 40, height: 1, backgroundColor: '#FFF' }} />
+                ))}
+                {/* Vertical lines */}
+                {Array.from({ length: 15 }).map((_, i) => (
+                  <View key={`v-${i}`} style={{ position: 'absolute', top: 0, bottom: 0, left: i * 40, width: 1, backgroundColor: '#FFF' }} />
+                ))}
+                {/* Concentric distance circles */}
+                <View style={{ position: 'absolute', top: '50%', left: '50%', width: 160, height: 160, borderRadius: 80, borderWidth: 1, borderColor: theme.gold, transform: [{ translateX: -80 }, { translateY: -80 }] }} />
+                <View style={{ position: 'absolute', top: '50%', left: '50%', width: 320, height: 320, borderRadius: 160, borderWidth: 1, borderColor: theme.gold, transform: [{ translateX: -160 }, { translateY: -160 }] }} />
+              </View>
+
+              {/* User Center Pulsing Dot */}
+              <View style={{ position: 'absolute', top: '50%', left: '50%', width: 18, height: 18, borderRadius: 9, backgroundColor: '#0084FF', borderWidth: 3, borderColor: '#FFF', transform: [{ translateX: -9 }, { translateY: -9 }], zIndex: 10, shadowColor: '#0084FF', shadowOpacity: 0.5, shadowRadius: 10 }}>
+                {/* Pulse ring */}
+                <View style={{ position: 'absolute', top: -12, left: -12, width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: '#0084FF', opacity: 0.4 }} />
+              </View>
+
+              {/* Interactive Listing Pins */}
+              {listings.map((l) => {
+                if (l.latitude === undefined || l.longitude === undefined) return null;
+                const distance = getDistance(USER_LATITUDE, USER_LONGITUDE, l.latitude, l.longitude);
+                if (distance > feedMaxDistance) return null;
+
+                // Map coordinates offset calculations from user center (50%, 50%)
+                const latDiff = l.latitude - USER_LATITUDE;
+                const lonDiff = l.longitude - USER_LONGITUDE;
+                const scale = 220 / (feedMaxDistance / 50 + 0.1); 
+                const topOffset = 50 - (latDiff * scale);
+                const leftOffset = 50 + (lonDiff * scale);
+
+                // Boundary protection
+                const topPct = Math.max(10, Math.min(85, topOffset));
+                const leftPct = Math.max(10, Math.min(85, leftOffset));
+
+                const isSelected = selectedListing?.id === l.id;
+
+                return (
+                  <Pressable
+                    key={l.id}
+                    style={{
+                      position: 'absolute',
+                      top: `${topPct}%`,
+                      left: `${leftPct}%`,
+                      transform: [{ translateX: -20 }, { translateY: -20 }],
+                      alignItems: 'center',
+                      zIndex: isSelected ? 99 : 5,
+                    }}
+                    onPress={() => setSelectedListing(l)}
+                  >
+                    <View style={{
+                      backgroundColor: isSelected ? theme.gold : '#1E293B',
+                      borderWidth: 2,
+                      borderColor: isSelected ? '#FFFFFF' : theme.gold,
+                      padding: 2,
+                      borderRadius: 24,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      paddingRight: 8,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 3,
+                      elevation: 4,
+                    }}>
+                      <Image
+                        source={typeof l.photos[0] === 'number' ? l.photos[0] : { uri: l.photos[0] }}
+                        style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#000' }}
+                      />
+                      <Text style={{ color: isSelected ? '#000000' : '#FFFFFF', fontSize: 10, fontWeight: 'bold' }}>
+                        {l.price.toLocaleString('tr-TR')} TL
+                      </Text>
+                    </View>
+                    <View style={{
+                      width: 0,
+                      height: 0,
+                      backgroundColor: 'transparent',
+                      borderStyle: 'solid',
+                      borderLeftWidth: 5,
+                      borderRightWidth: 5,
+                      borderBottomWidth: 5,
+                      borderLeftColor: 'transparent',
+                      borderRightColor: 'transparent',
+                      borderBottomColor: isSelected ? theme.gold : '#1E293B',
+                      transform: [{ rotate: '180deg' }],
+                      marginTop: -1
+                    }} />
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Bottom Listing Details Card Preview on Map */}
+            <View style={{ padding: 16, backgroundColor: theme.backgroundElement, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+              {selectedListing ? (
+                <View style={{ gap: 12 }}>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    <Image
+                      source={typeof selectedListing.photos[0] === 'number' ? selectedListing.photos[0] : { uri: selectedListing.photos[0] }}
+                      style={{ width: 60, height: 60, borderRadius: 8, backgroundColor: '#000' }}
+                    />
+                    <View style={{ flex: 1, justifyContent: 'space-between' }}>
+                      <View>
+                        <Text style={{ color: theme.text, fontSize: 13, fontWeight: 'bold' }} numberOfLines={1}>
+                          {selectedListing.title}
+                        </Text>
+                        <Text style={{ color: theme.textSecondary, fontSize: 11, marginTop: 2 }}>
+                          📍 {selectedListing.city} • {getDistance(USER_LATITUDE, USER_LONGITUDE, selectedListing.latitude || 0, selectedListing.longitude || 0).toFixed(0)} km uzakta
+                        </Text>
+                      </View>
+                      <Text style={{ color: theme.gold, fontSize: 14, fontWeight: 'bold' }}>
+                        {selectedListing.price.toLocaleString('tr-TR')} TL
+                      </Text>
+                    </View>
+                  </View>
+                  <Pressable
+                    style={{
+                      backgroundColor: theme.gold,
+                      paddingVertical: 10,
+                      borderRadius: 8,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onPress={() => {
+                      setMapModalVisible(false);
+                      router.push(`/product/${selectedListing.id}`);
+                    }}
+                  >
+                    <Text style={{ color: '#000000', fontSize: 13, fontWeight: 'bold' }}>Ürünü İncele & Teklif Ver</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={{ height: 96, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ color: theme.textSecondary, fontSize: 12, textAlign: 'center' }}>
+                    İncelemek istediğiniz ürünün harita üzerindeki fiyat etiketine tıklayın.
+                  </Text>
+                </View>
+              )}
+            </View>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* FLOATING COMPARE BUTTON */}
+      {compareList.length > 0 && (
+        <Pressable
+          style={{
+            position: 'absolute',
+            bottom: 90, 
+            right: 16,
+            backgroundColor: '#FF5500',
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: 24,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 5,
+            elevation: 8,
+            zIndex: 9999,
+          }}
+          onPress={() => setCompareModalVisible(true)}
+        >
+          <GitCompare size={16} color="#FFFFFF" />
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>
+            Karşılaştır ({compareList.length})
+          </Text>
+        </Pressable>
+      )}
+
+      {/* GORGEOUS LISTING COMPARISON MODAL */}
+      <Modal
+        visible={compareModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCompareModalVisible(false)}
+      >
+        <View style={[styles.modalBackdrop, { justifyContent: 'center' }]}>
+          <ThemedView type="backgroundElement" style={{ width: '95%', height: '85%', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: theme.gold }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <GitCompare size={20} color={theme.gold} />
+                <Text style={{ color: theme.text, fontSize: 16, fontWeight: 'bold' }}>İlan Karşılaştırma</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <Pressable onPress={() => { clearCompareList(); setCompareModalVisible(false); }}>
+                  <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: 'bold' }}>Temizle</Text>
+                </Pressable>
+                <Pressable style={{ padding: 4 }} onPress={() => setCompareModalVisible(false)}>
+                  <X size={20} color={theme.text} />
+                </Pressable>
+              </View>
+            </View>
+
+            {compareList.length === 0 ? (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+                <GitCompare size={48} color={theme.textSecondary} style={{ marginBottom: 16, opacity: 0.5 }} />
+                <Text style={{ color: theme.textSecondary, fontSize: 13, textAlign: 'center' }}>
+                  Karşılaştırılacak ilan bulunamadı. Lütfen ürün detay sayfalarından karşılaştırma listesine ilan ekleyin.
+                </Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+                {/* Horizontal scroll containing the columns */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ flexDirection: 'row' }}>
+                  {/* Features Column Label */}
+                  <View style={{ width: 100, borderRightWidth: 1, borderRightColor: theme.backgroundSelected, backgroundColor: theme.backgroundElement }}>
+                    <View style={{ height: 130, padding: 8, justifyContent: 'center' }}>
+                      <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.textSecondary }}>Ürün Bilgisi</Text>
+                    </View>
+                    {[
+                      'Fiyat',
+                      'Kategori',
+                      'Konum / Mesafe',
+                      'Güven Skoru',
+                      'Kilometre (KM)',
+                      'Model Yılı',
+                      'Vites Tipi',
+                      'Metrekare (m²)',
+                      'Oda Sayısı',
+                      'Durum / Kondisyon',
+                      'İşlem'
+                    ].map((label, idx) => (
+                      <View
+                        key={idx}
+                        style={{
+                          height: 50,
+                          paddingHorizontal: 8,
+                          justifyContent: 'center',
+                          borderTopWidth: 1,
+                          borderTopColor: theme.backgroundSelected,
+                        }}
+                      >
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: theme.textSecondary }} numberOfLines={2}>
+                          {label}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  {/* Columns for Compared Listings */}
+                  {compareList.map((item) => {
+                    const distance = item.latitude !== undefined && item.longitude !== undefined 
+                      ? getDistance(USER_LATITUDE, USER_LONGITUDE, item.latitude, item.longitude).toFixed(0) + ' km'
+                      : '-';
+
+                    return (
+                      <View
+                        key={item.id}
+                        style={{
+                          width: 140,
+                          borderRightWidth: 1,
+                          borderRightColor: theme.backgroundSelected,
+                          alignItems: 'center',
+                        }}
+                      >
+                        {/* Thumbnail & Title header */}
+                        <View style={{ height: 130, padding: 8, alignItems: 'center', justifyContent: 'center', position: 'relative', width: '100%' }}>
+                          <Pressable
+                            style={{ position: 'absolute', top: 4, right: 4, zIndex: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                            onPress={() => removeFromCompareList(item.id)}
+                          >
+                            <X size={12} color="#FFF" />
+                          </Pressable>
+                          <Image
+                            source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+                            style={{ width: 64, height: 64, borderRadius: 8, backgroundColor: '#000', marginBottom: 6 }}
+                          />
+                          <Text style={{ color: theme.text, fontSize: 10, fontWeight: 'bold', textAlign: 'center' }} numberOfLines={2}>
+                            {item.title}
+                          </Text>
+                        </View>
+
+                        {/* Price */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold', textAlign: 'center' }}>
+                            {item.price.toLocaleString('tr-TR')} TL
+                          </Text>
+                        </View>
+
+                        {/* Category */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }} numberOfLines={2}>
+                            {item.category}
+                          </Text>
+                        </View>
+
+                        {/* Location / Distance */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, fontWeight: '500', textAlign: 'center' }} numberOfLines={2}>
+                            {item.city} ({distance})
+                          </Text>
+                        </View>
+
+                        {/* Trust Score */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: isDark ? theme.gold : theme.goldAccent, fontSize: 10, fontWeight: 'bold' }}>
+                            {item.sellerTrustScore}/10
+                          </Text>
+                          {item.sellerVerified && (
+                            <Text style={{ color: '#10B981', fontSize: 8, fontWeight: 'bold', marginTop: 1 }}>✓ Doğrulanmış</Text>
+                          )}
+                        </View>
+
+                        {/* KM */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.km !== undefined ? item.km.toLocaleString('tr-TR') + ' km' : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Model Yılı */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.year !== undefined ? item.year : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Vites */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.transmission !== undefined ? item.transmission : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Sqm */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.sqm !== undefined ? item.sqm + ' m²' : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Rooms */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.text, fontSize: 10, textAlign: 'center' }}>
+                            {item.rooms !== undefined ? item.rooms : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Condition */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Text style={{ color: theme.textSecondary, fontSize: 10, textAlign: 'center' }}>
+                            {item.condition}
+                          </Text>
+                        </View>
+
+                        {/* CTA button to visit product */}
+                        <View style={{ height: 50, width: '100%', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                          <Pressable
+                            style={{ backgroundColor: theme.gold, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6 }}
+                            onPress={() => {
+                              setCompareModalVisible(false);
+                              router.push(`/product/${item.id}`);
+                            }}
+                          >
+                            <Text style={{ color: '#000', fontSize: 9, fontWeight: 'bold' }}>İncele</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </ScrollView>
+            )}
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Bid / Offer Modal */}
         <Modal
           visible={bidModalVisible}
           transparent
@@ -2249,34 +3180,167 @@ export default function HomeScreen() {
               </View>
  
               <View style={styles.modalBody}>
-                <ThemedText style={{ color: theme.textSecondary, marginBottom: 12 }}>
-                  Paylaşmak istediğiniz hikaye görselinin adresini (URL) girin. Hikayeniz 24 saat boyunca tüm kullanıcılara gösterilecek ve ardından otomatik olarak silinecektir.
+                <ThemedText style={{ color: theme.textSecondary, marginBottom: 16, fontSize: 13, lineHeight: 18 }}>
+                  Hikayeniz 24 saat boyunca tüm kullanıcılara gösterilecek ve ardından otomatik olarak silinecektir. Bir görsel veya 8 saniyelik video ekleyebilirsiniz.
                 </ThemedText>
- 
-                <View style={styles.formGroup}>
-                  <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Hikaye Görsel Adresi (URL)</Text>
-                  <TextInput
-                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                    placeholder="https://images.unsplash.com/photo-..."
-                    placeholderTextColor={theme.textSecondary}
-                    value={newStoryImageUrl}
-                    onChangeText={setNewStoryImageUrl}
-                  />
+
+                {/* 1. MEDYA YÜKLEME ALANI */}
+                <View style={[styles.formGroup, { marginBottom: 16 }]}>
+                  <Text style={[styles.formLabel, { color: theme.text, marginBottom: 8 }]}>Hikaye Medyası</Text>
+                  
+                  {newStoryImageUrl ? (
+                    // Yüklenen Medya Önizleme
+                    <View style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: theme.backgroundSelected,
+                      borderColor: theme.backgroundSelected,
+                      borderWidth: 1,
+                      borderRadius: 10,
+                      padding: 12,
+                      justifyContent: 'space-between'
+                    }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                        {storyMediaType === 'video' ? (
+                          <View style={{ width: 44, height: 44, borderRadius: 6, backgroundColor: 'rgba(255, 85, 0, 0.1)', alignItems: 'center', justifyContent: 'center' }}>
+                            <Play size={20} color={theme.gold} fill={theme.gold} />
+                          </View>
+                        ) : (
+                          <Image source={{ uri: newStoryImageUrl }} style={{ width: 44, height: 44, borderRadius: 6 }} />
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
+                            {newStoryImageUrl.substring(newStoryImageUrl.lastIndexOf('/') + 1)}
+                          </Text>
+                          <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold', marginTop: 2 }}>
+                            {storyMediaType === 'video' ? '📹 Video Dosyası (8 Saniye)' : '📷 Görsel Dosyası'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Pressable 
+                        onPress={() => setNewStoryImageUrl('')}
+                        style={{ padding: 6 }}
+                        hitSlop={10}
+                      >
+                        <X size={18} color="#EF4444" />
+                      </Pressable>
+                    </View>
+                  ) : storyUploading ? (
+                    // Yükleme Animasyonu
+                    <View style={{
+                      backgroundColor: 'rgba(255,255,255,0.01)',
+                      borderColor: theme.gold,
+                      borderWidth: 1,
+                      borderStyle: 'dashed',
+                      borderRadius: 10,
+                      padding: 20,
+                      alignItems: 'center',
+                      gap: 12
+                    }}>
+                      <ActivityIndicator size="small" color={theme.gold} />
+                      <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }}>
+                        Dosya yükleniyor... %{storyUploadProgress}
+                      </Text>
+                      <View style={{ width: '80%', height: 4, backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                        <View style={{ width: `${storyUploadProgress}%`, height: '100%', backgroundColor: theme.gold }} />
+                      </View>
+                    </View>
+                  ) : (
+                    // Yükleme Tetikleyici
+                    <Pressable
+                      onPress={handlePickStoryMedia}
+                      style={({ pressed }) => [
+                        {
+                          backgroundColor: 'rgba(255,255,255,0.01)',
+                          borderColor: pressed ? theme.gold : theme.backgroundSelected,
+                          borderWidth: 1.5,
+                          borderStyle: 'dashed',
+                          borderRadius: 10,
+                          padding: 24,
+                          alignItems: 'center',
+                          gap: 8,
+                        },
+                        pressed && { opacity: 0.85 }
+                      ]}
+                    >
+                      <Upload size={32} color={theme.textSecondary} />
+                      <Text style={{ color: theme.text, fontSize: 14, fontWeight: 'bold' }}>
+                        Dosya Seçmek İçin Dokunun
+                      </Text>
+                      <Text style={{ color: theme.textSecondary, fontSize: 11, textAlign: 'center' }}>
+                        Desteklenen formatlar: Görsel veya Video (Maks. 8 saniye)
+                      </Text>
+                    </Pressable>
+                  )}
                 </View>
 
-                <View style={styles.formGroup}>
-                  <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Bağlı Ürün ID (Opsiyonel)</Text>
-                  <TextInput
-                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                    placeholder="Örn: 1 veya 2"
-                    placeholderTextColor={theme.textSecondary}
-                    value={newStoryProductId}
-                    onChangeText={setNewStoryProductId}
-                  />
+                {/* 2. ÜRÜN İLİŞKİLENDİRME (SELECT PRODUCT DROPDOWN) */}
+                <View style={[styles.formGroup, { marginBottom: 20 }]}>
+                  <Text style={[styles.formLabel, { color: theme.text, marginBottom: 8 }]}>Ürün Bağla (Opsiyonel)</Text>
+                  
+                  {selectedStoryProduct ? (
+                    // Seçilen Ürünün Kartı
+                    <View style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: theme.backgroundSelected,
+                      borderColor: theme.backgroundSelected,
+                      borderWidth: 1,
+                      borderRadius: 10,
+                      padding: 12,
+                      justifyContent: 'space-between'
+                    }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                        <Image 
+                          source={typeof selectedStoryProduct.photos[0] === 'number' ? selectedStoryProduct.photos[0] : { uri: selectedStoryProduct.photos[0] }} 
+                          style={{ width: 44, height: 44, borderRadius: 6 }} 
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }} numberOfLines={1}>
+                            {selectedStoryProduct.title}
+                          </Text>
+                          <Text style={{ color: theme.gold, fontSize: 12, fontWeight: 'bold', marginTop: 2 }}>
+                            {selectedStoryProduct.price.toLocaleString('tr-TR')} TL
+                          </Text>
+                        </View>
+                      </View>
+                      <Pressable 
+                        onPress={() => setSelectedStoryProduct(null)}
+                        style={{ padding: 6 }}
+                        hitSlop={10}
+                      >
+                        <X size={18} color="#EF4444" />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    // Ürün Seçim Tetikleyici
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        backgroundColor: 'rgba(255,255,255,0.01)',
+                        borderColor: theme.backgroundSelected,
+                        borderWidth: 1,
+                        paddingHorizontal: 16,
+                        paddingVertical: 12,
+                        borderRadius: 10,
+                      }}
+                      onPress={() => setStoryProductPickerVisible(true)}
+                    >
+                      <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
+                        İlanlarınızdan birini bağlayın...
+                      </Text>
+                      <ChevronDown size={18} color={theme.textSecondary} />
+                    </Pressable>
+                  )}
                 </View>
  
-                <Pressable style={styles.submitButton} onPress={handleShareStory}>
-                  <Text style={styles.submitButtonText}>Şimdi Paylaş (8 Saniye)</Text>
+                <Pressable 
+                  style={[styles.submitButton, { backgroundColor: theme.gold, marginTop: 10 }]} 
+                  onPress={handleShareStory}
+                >
+                  <Text style={[styles.submitButtonText, { color: '#070C19', fontWeight: '800' }]}>Şimdi Paylaş</Text>
                 </Pressable>
               </View>
             </ThemedView>
@@ -2297,11 +3361,30 @@ export default function HomeScreen() {
                 onTouchStart={onTouchStart}
                 onTouchEnd={onTouchEnd}
               >
-                {/* Full Screen Image */}
-                <Image 
-                  source={{ uri: activeStoryList[activeStoryIndex].mediaUrl }} 
-                  style={styles.storyViewerImage} 
-                />
+                {/* Full Screen Media (Image or Video) */}
+                {(() => {
+                  const currentStory = activeStoryList[activeStoryIndex];
+                  const isVideo = currentStory.mediaUrl.toLowerCase().endsWith('.mp4') || 
+                                  currentStory.mediaUrl.toLowerCase().endsWith('.mov') ||
+                                  currentStory.mediaUrl.includes('.mp4?') ||
+                                  currentStory.mediaUrl.includes('.mov?') ||
+                                  currentStory.mediaType === 'video';
+                  
+                  if (isVideo) {
+                    return (
+                      <StoryVideoPlayer 
+                        url={currentStory.mediaUrl} 
+                        isActive={storyViewerVisible} 
+                      />
+                    );
+                  }
+                  return (
+                    <Image 
+                      source={{ uri: currentStory.mediaUrl }} 
+                      style={styles.storyViewerImage} 
+                    />
+                  );
+                })()}
  
                 {/* Progress Indicators Bar */}
                 <View style={styles.storyProgressBarContainer}>
@@ -2416,6 +3499,357 @@ export default function HomeScreen() {
             </Animated.View>
           </Animated.View>
         )}
+
+        {/* NOTIFICATION MODAL */}
+        <Modal
+          visible={notificationModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setNotificationModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <ThemedView type="backgroundElement" style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <ThemedText style={styles.modalTitle}>Bildirimler 🔔</ThemedText>
+                <Pressable onPress={() => setNotificationModalVisible(false)} style={{ padding: 4 }}>
+                  <X size={20} color={theme.text} />
+                </Pressable>
+              </View>
+
+              {/* SUPER ADMIN: SEND NOTIFICATION TO ALL FORM */}
+              {currentUser?.role === 'super_admin' && (
+                <View style={{
+                  backgroundColor: theme.backgroundSelected,
+                  padding: 12,
+                  borderRadius: 12,
+                  marginBottom: 16,
+                  borderWidth: 1,
+                  borderColor: theme.gold
+                }}>
+                  <ThemedText style={{ fontSize: 13, fontWeight: 'bold', color: theme.gold, marginBottom: 8 }}>
+                    📢 Herkese Global Bildirim Gönder (Süper Admin)
+                  </ThemedText>
+                  
+                  <TextInput
+                    placeholder="Bildirim Başlığı"
+                    placeholderTextColor={theme.textSecondary}
+                    style={{
+                      backgroundColor: theme.background,
+                      color: theme.text,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      fontSize: 12,
+                      marginBottom: 8,
+                    }}
+                    value={adminNotifTitle}
+                    onChangeText={setAdminNotifTitle}
+                  />
+                  
+                  <TextInput
+                    placeholder="Bildirim Mesajı"
+                    placeholderTextColor={theme.textSecondary}
+                    multiline
+                    style={{
+                      backgroundColor: theme.background,
+                      color: theme.text,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      fontSize: 12,
+                      minHeight: 48,
+                      textAlignVertical: 'top',
+                      marginBottom: 8,
+                    }}
+                    value={adminNotifMessage}
+                    onChangeText={setAdminNotifMessage}
+                  />
+                  
+                  <Pressable
+                    style={{
+                      backgroundColor: theme.gold,
+                      paddingVertical: 8,
+                      borderRadius: 6,
+                      alignItems: 'center'
+                    }}
+                    onPress={() => {
+                      if (!adminNotifTitle.trim() || !adminNotifMessage.trim()) {
+                        alert('Lütfen başlık ve mesaj girin.');
+                        return;
+                      }
+                      sendSystemNotificationToAll(adminNotifTitle, adminNotifMessage);
+                      setAdminNotifTitle('');
+                      setAdminNotifMessage('');
+                      alert('Bildirim tüm kullanıcılara gönderildi!');
+                    }}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' }}>Gönder</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 400 }}>
+                {userNotifications.length === 0 ? (
+                  <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                    <Bell size={32} color={theme.textSecondary} style={{ marginBottom: 12 }} />
+                    <ThemedText style={{ color: theme.textSecondary, fontSize: 13 }}>Hiç bildiriminiz bulunmuyor.</ThemedText>
+                  </View>
+                ) : (
+                  userNotifications.map((notif) => (
+                    <Pressable
+                      key={notif.id}
+                      style={{
+                        padding: 12,
+                        borderBottomWidth: 1,
+                        borderBottomColor: theme.backgroundSelected,
+                        backgroundColor: notif.isRead ? 'transparent' : 'rgba(255, 107, 0, 0.08)',
+                        borderRadius: 8,
+                        marginBottom: 8
+                      }}
+                      onPress={() => markNotificationAsRead(notif.id)}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <ThemedText style={{ fontSize: 14, fontWeight: 'bold', color: notif.isRead ? theme.text : theme.gold }}>
+                          {notif.title}
+                        </ThemedText>
+                        {!notif.isRead && (
+                          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.gold }} />
+                        )}
+                      </View>
+                      <ThemedText style={{ fontSize: 12, color: theme.textSecondary, lineHeight: 16 }}>
+                        {notif.message}
+                      </ThemedText>
+                      <Text style={{ fontSize: 9, color: theme.textSecondary, marginTop: 4 }}>
+                        {new Date(notif.createdAt).toLocaleDateString('tr-TR')} {new Date(notif.createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </Pressable>
+                  ))
+                )}
+              </ScrollView>
+
+              {userNotifications.length > 0 && (
+                <Pressable
+                  style={{
+                    marginTop: 16,
+                    backgroundColor: theme.backgroundSelected,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    alignItems: 'center'
+                  }}
+                  onPress={() => {
+                    userNotifications.forEach((n) => markNotificationAsRead(n.id));
+                    alert('Tüm bildirimler okundu olarak işaretlendi.');
+                  }}
+                >
+                  <ThemedText style={{ fontSize: 13, fontWeight: '600' }}>Tümünü Okundu İşaretle</ThemedText>
+                </Pressable>
+              )}
+            </ThemedView>
+          </View>
+        </Modal>
+
+        {/* Reels City Picker Modal */}
+        <Modal
+          visible={reelsCityPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setReelsCityPickerVisible(false)}
+        >
+          <Pressable 
+            style={styles.modalBackdrop} 
+            onPress={() => setReelsCityPickerVisible(false)}
+          >
+            <ThemedView 
+              type="backgroundElement" 
+              style={{
+                width: '90%',
+                maxWidth: 360,
+                borderRadius: 16,
+                padding: 20,
+                borderWidth: 1,
+                borderColor: theme.backgroundSelected,
+              }}
+            >
+              <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
+                Reels Şehri Seçin
+              </ThemedText>
+              <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                {['Tüm Türkiye', 'İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => {
+                  const isSelected = (c === 'Tüm Türkiye' && reelsSelectedCity === null) || reelsSelectedCity === c;
+                  return (
+                    <Pressable
+                      key={c}
+                      style={{
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        borderRadius: 8,
+                        backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                      onPress={() => {
+                        setReelsSelectedCity(c === 'Tüm Türkiye' ? null : c);
+                        setReelsCityPickerVisible(false);
+                      }}
+                    >
+                      <Text style={{ 
+                        color: isSelected ? theme.gold : theme.text,
+                        fontWeight: isSelected ? 'bold' : 'normal',
+                        fontSize: 14,
+                      }}>
+                        {c}
+                      </Text>
+                      {isSelected && <Check size={16} color={theme.gold} />}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </ThemedView>
+          </Pressable>
+        </Modal>
+
+        {/* Feed City Picker Modal */}
+        <Modal
+          visible={feedCityPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setFeedCityPickerVisible(false)}
+        >
+          <Pressable 
+            style={styles.modalBackdrop} 
+            onPress={() => setFeedCityPickerVisible(false)}
+          >
+            <ThemedView 
+              type="backgroundElement" 
+              style={{
+                width: '90%',
+                maxWidth: 360,
+                borderRadius: 16,
+                padding: 20,
+                borderWidth: 1,
+                borderColor: theme.backgroundSelected,
+              }}
+            >
+              <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
+                Şehir Seçin
+              </ThemedText>
+              <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                {['Tüm Türkiye', 'İstanbul', 'Ankara', 'İzmir', 'Bursa', 'Antalya', 'Muğla', 'Adana', 'Trabzon', 'Eskişehir', 'Gaziantep', 'Konya', 'Samsun'].map((c) => {
+                  const isSelected = (c === 'Tüm Türkiye' && feedSelectedCity === null) || feedSelectedCity === c;
+                  return (
+                    <Pressable
+                      key={c}
+                      style={{
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        borderRadius: 8,
+                        backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                      onPress={() => {
+                        setFeedSelectedCity(c === 'Tüm Türkiye' ? null : c);
+                        setFeedCityPickerVisible(false);
+                      }}
+                    >
+                      <Text style={{ 
+                        color: isSelected ? theme.gold : theme.text,
+                        fontWeight: isSelected ? 'bold' : 'normal',
+                        fontSize: 14,
+                      }}>
+                        {c}
+                      </Text>
+                      {isSelected && <Check size={16} color={theme.gold} />}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </ThemedView>
+          </Pressable>
+        </Modal>
+        {/* Story Product Picker Modal */}
+        <Modal
+          visible={storyProductPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setStoryProductPickerVisible(false)}
+        >
+          <Pressable 
+            style={styles.modalBackdrop} 
+            onPress={() => setStoryProductPickerVisible(false)}
+          >
+            <ThemedView 
+              type="backgroundElement" 
+              style={{
+                width: '90%',
+                maxWidth: 380,
+                borderRadius: 16,
+                padding: 20,
+                borderWidth: 1,
+                borderColor: theme.backgroundSelected,
+              }}
+            >
+              <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 16, textAlign: 'center' }}>
+                İlanınızı Seçin
+              </ThemedText>
+              
+              <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                {listings.filter(item => currentUser && (item.sellerName === currentUser.name || (currentUser.shopName && item.sellerName === currentUser.shopName))).length === 0 ? (
+                  <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                    <ThemedText style={{ color: theme.textSecondary, fontSize: 13 }}>
+                      Aktif ilanınız bulunmamaktadır.
+                    </ThemedText>
+                  </View>
+                ) : (
+                  listings
+                    .filter(item => currentUser && (item.sellerName === currentUser.name || (currentUser.shopName && item.sellerName === currentUser.shopName)))
+                    .map((item) => {
+                      const isSelected = selectedStoryProduct?.id === item.id;
+                      return (
+                        <Pressable
+                          key={item.id}
+                          style={{
+                            paddingVertical: 10,
+                            paddingHorizontal: 12,
+                            borderRadius: 8,
+                            backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 10,
+                            marginBottom: 8,
+                          }}
+                          onPress={() => {
+                            setSelectedStoryProduct(item);
+                            setStoryProductPickerVisible(false);
+                          }}
+                        >
+                          <Image 
+                            source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }} 
+                            style={{ width: 36, height: 36, borderRadius: 4 }} 
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ 
+                              color: isSelected ? theme.gold : theme.text,
+                              fontWeight: isSelected ? 'bold' : 'normal',
+                              fontSize: 13,
+                            }} numberOfLines={1}>
+                              {item.title}
+                            </Text>
+                            <Text style={{ color: theme.textSecondary, fontSize: 11, marginTop: 2 }}>
+                              {item.price.toLocaleString('tr-TR')} TL
+                            </Text>
+                          </View>
+                          {isSelected && <Check size={16} color={theme.gold} />}
+                        </Pressable>
+                      );
+                    })
+                )}
+              </ScrollView>
+            </ThemedView>
+          </Pressable>
+        </Modal>
 
       </ThemedView>
     );
@@ -3859,6 +5293,22 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 9,
     fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  reelsAddToCartBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    height: 38,
+    borderWidth: 1.5,
+    borderColor: '#FF5500',
+  },
+  reelsAddToCartBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 11,
     letterSpacing: 0.5,
   },
 });

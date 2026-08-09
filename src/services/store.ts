@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import * as Notifications from 'expo-notifications';
+import { Platform, Alert } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
 
 export interface Listing {
   id: string;
@@ -33,6 +36,22 @@ export interface Listing {
   isRealEstate?: boolean;
   isVehicle?: boolean;
   status?: 'active' | 'pending_approval' | 'rejected';
+  latitude?: number;
+  longitude?: number;
+  km?: number;
+  transmission?: 'Manuel' | 'Otomatik';
+  sqm?: number;
+  rooms?: string;
+}
+
+export interface Review {
+  id: string;
+  sellerName: string;
+  authorName: string;
+  authorAvatar: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
 }
 
 export interface Message {
@@ -56,6 +75,7 @@ export interface Chat {
   otherPartyName: string;
   otherPartyAvatar: string;
   messages: Message[];
+  fromSellerProfile?: boolean;
 }
 
 export interface Story {
@@ -67,6 +87,21 @@ export interface Story {
   createdAt: number;
   productId?: string;
   productTitle?: string;
+  mediaType?: 'image' | 'video';
+}
+
+export interface Order {
+  id: string;
+  buyerId: string;
+  buyerName: string;
+  buyerPhone: string;
+  buyerAddress: string;
+  sellerName: string;
+  items: CartItem[];
+  totalAmount: number;
+  status: 'pending' | 'processing' | 'shipped' | 'completed';
+  trackingNumber?: string;
+  createdAt: string;
 }
 
 export interface CartItem {
@@ -102,6 +137,15 @@ export interface UserProfile {
   rentACarApplicationStatus?: 'none' | 'pending' | 'approved' | 'rejected';
 }
 
+export interface Notification {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  createdAt: string;
+  isRead: boolean;
+}
+
 interface StoreState {
   currentUser: UserProfile | null;
   accounts: {
@@ -115,6 +159,7 @@ interface StoreState {
   registerAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller', name: string, shopName?: string) => void;
   loginAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller') => boolean;
   logoutAccount: () => void;
+  updateProfileAvatar: (avatarUri: string) => void;
   listings: Listing[];
   rentACarApplications: RentACarApplication[];
   applyForRentACar: (app: Omit<RentACarApplication, 'id' | 'status' | 'createdAt'>) => void;
@@ -143,7 +188,7 @@ interface StoreState {
   sendInChatOffer: (chatId: string, amount: number) => void;
   respondToOffer: (chatId: string, messageId: string, response: 'accepted' | 'rejected', counterAmount?: number) => void;
   sendMessage: (chatId: string, text: string, type?: Message['type'], mediaUrl?: string, fileName?: string) => void;
-  createChat: (listingId: string) => string;
+  createChat: (listingId: string, fromSellerProfile?: boolean) => string;
   decrementTimers: () => void;
   addListing: (listing: Omit<Listing, 'id' | 'liked' | 'favorited' | 'favoritesCount'>) => void;
   
@@ -165,7 +210,46 @@ interface StoreState {
   setAuthMode: (mode: 'login' | 'register') => void;
   checkoutStep: 'cart' | 'shipping' | 'payment' | 'completed';
   setCheckoutStep: (step: 'cart' | 'shipping' | 'payment' | 'completed') => void;
+
+  // Order State & Actions
+  orders: Order[];
+  addOrder: (order: Omit<Order, 'id' | 'createdAt' | 'status'>) => string;
+  updateOrderStatus: (orderId: string, status: Order['status'], trackingNumber?: string) => void;
+
+  // Notification State & Actions
+  notifications: Notification[];
+  addNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'isRead'>) => void;
+  sendSystemNotificationToAll: (title: string, message: string) => void;
+  markNotificationAsRead: (notificationId: string) => void;
+  clearNotifications: () => void;
+
+  // Secure Server-side Simulation Actions
+  serverCalculateCartTotal: (cartItems: { listingId: string; quantity: number }[]) => {
+    items: { listing: Listing; quantity: number; price: number }[];
+    subtotal: number;
+    shipping: number;
+    total: number;
+    verificationToken: string;
+  };
+  serverValidateUploadedFile: (fileName: string, fileSize: number, mimeType?: string) => {
+    success: boolean;
+    error?: string;
+  };
+  startWebSocketSim: () => void;
+  isBiometricsEnabled: boolean;
+  setBiometricsEnabled: (enabled: boolean) => void;
+  restoreSession: () => Promise<void>;
+  savedCards: { id: string; token: string; cardSummary: string; cardHolder: string }[];
+  addSavedCard: (card: { token: string; cardSummary: string; cardHolder: string }) => void;
+  deleteSavedCard: (id: string) => void;
+  reviews: Review[];
+  addReview: (review: Omit<Review, 'id' | 'createdAt'>) => void;
+  compareList: Listing[];
+  addToCompareList: (listing: Listing) => void;
+  removeFromCompareList: (id: string) => void;
+  clearCompareList: () => void;
 }
+
 
 export interface CollageBox {
   images: string[];
@@ -623,6 +707,8 @@ const initialListings: Listing[] = [
     city: 'Muğla',
     isRealEstate: true,
     videoUrl: localVideos.video_2,
+    sqm: 145,
+    rooms: '3+1',
   },
   {
     id: 'mega_galeri',
@@ -644,6 +730,9 @@ const initialListings: Listing[] = [
     city: 'İstanbul',
     isVehicle: true,
     videoUrl: localVideos.video_1,
+    km: 18000,
+    transmission: 'Otomatik',
+    year: 2023,
   },
   {
     id: 'mega_rent',
@@ -666,6 +755,9 @@ const initialListings: Listing[] = [
     city: 'Ankara',
     isVehicle: true,
     videoUrl: localVideos.video_3,
+    km: 67000,
+    transmission: 'Otomatik',
+    year: 2021,
   },
   {
     id: 'mega_uretici',
@@ -815,6 +907,8 @@ const defaultFeaturedAuction: FeaturedAuctionState = {
   ]
 };
 
+let wsBidInterval: any = null;
+
 export const useAppStore = create<StoreState>((set, get) => ({
   currentUser: {
     id: 'customer_1',
@@ -895,6 +989,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
   draftCollage: defaultCollage,
   liveFeaturedAuction: defaultFeaturedAuction,
   draftFeaturedAuction: defaultFeaturedAuction,
+  orders: [],
+
 
   updateDraftCollage: (collage) => {
     set({ draftCollage: collage });
@@ -1011,12 +1107,60 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const account = get().accounts[cleanedPhone];
     if (account && account[role]) {
       set({ currentUser: account[role] });
+      
+      if (Platform.OS !== 'web') {
+        SecureStore.setItemAsync('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving secure phone:', err));
+        SecureStore.setItemAsync('user_session_role', role).catch(err => console.warn('Error saving secure role:', err));
+      }
+
       return true;
     }
     return false;
   },
 
-  logoutAccount: () => set({ currentUser: null }),
+  logoutAccount: () => {
+    set({ currentUser: null });
+    if (Platform.OS !== 'web') {
+      SecureStore.deleteItemAsync('user_session_phone').catch(err => console.warn('Error deleting secure phone:', err));
+      SecureStore.deleteItemAsync('user_session_role').catch(err => console.warn('Error deleting secure role:', err));
+    }
+  },
+
+  restoreSession: async () => {
+    if (Platform.OS === 'web') return;
+    try {
+      const phone = await SecureStore.getItemAsync('user_session_phone');
+      const role = await SecureStore.getItemAsync('user_session_role');
+      if (phone && role) {
+        const state = get();
+        const account = state.accounts[phone];
+        if (account && account[role as keyof typeof account]) {
+          set({ currentUser: account[role as keyof typeof account]! });
+          console.log('[DEBUG] SecureStore session restored successfully:', phone, role);
+        }
+      }
+    } catch (err) {
+      console.warn('Error restoring secure store session:', err);
+    }
+  },
+
+  updateProfileAvatar: (avatarUri) => set((state) => {
+    if (!state.currentUser) return {};
+    const updatedUser = { ...state.currentUser, avatar: avatarUri };
+    
+    // Also update in accounts store
+    const phone = state.currentUser.phone;
+    const role = state.currentUser.role;
+    const updatedAccounts = { ...state.accounts };
+    if (updatedAccounts[phone] && updatedAccounts[phone][role]) {
+      updatedAccounts[phone][role] = { ...updatedAccounts[phone][role]!, avatar: avatarUri };
+    }
+    
+    return {
+      currentUser: updatedUser,
+      accounts: updatedAccounts
+    };
+  }),
  
   stories: [
     {
@@ -1024,9 +1168,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
       sellerId: 'seller_1',
       sellerName: 'Akar Antika',
       sellerAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      mediaUrl: 'https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=800',
+      mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_1.mp4?alt=media&token=ea1b33fa-45e8-4b1b-8f58-6d1ff8ea8cde',
       createdAt: Date.now() - 2 * 60 * 60 * 1000,
       productId: '1',
+      mediaType: 'video',
     },
     {
       id: 'story_mock_2',
@@ -1036,6 +1181,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       mediaUrl: 'https://images.unsplash.com/photo-1603006905003-be475563bc59?w=800',
       createdAt: Date.now() - 4 * 60 * 60 * 1000,
       productId: '2',
+      mediaType: 'image',
     },
     {
       id: 'story_mock_3',
@@ -1045,6 +1191,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       mediaUrl: 'https://images.unsplash.com/photo-1472289065668-ce650ac443d2?w=800',
       createdAt: Date.now() - 6 * 60 * 60 * 1000,
       productId: '3',
+      mediaType: 'image',
     },
     {
       id: 'story_mock_4',
@@ -1054,6 +1201,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       mediaUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800',
       createdAt: Date.now() - 8 * 60 * 60 * 1000,
       productId: '4',
+      mediaType: 'image',
     },
     {
       id: 'story_mock_5',
@@ -1063,19 +1211,28 @@ export const useAppStore = create<StoreState>((set, get) => ({
       mediaUrl: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=800',
       createdAt: Date.now() - 10 * 60 * 60 * 1000,
       productId: '5',
+      mediaType: 'image',
     }
   ],
  
-  addStory: (story) => set((state) => ({
-    stories: [
-      {
-        ...story,
-        id: `story_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        createdAt: Date.now(),
-      },
-      ...state.stories
-    ]
-  })),
+  addStory: (story) => set((state) => {
+    const isVideo = story.mediaUrl.toLowerCase().endsWith('.mp4') || 
+                    story.mediaUrl.toLowerCase().endsWith('.mov') ||
+                    story.mediaUrl.includes('.mp4?') ||
+                    story.mediaUrl.includes('.mov?');
+    return {
+      stories: [
+        {
+          ...story,
+          mediaType: isVideo ? 'video' : 'image',
+          id: `story_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          createdAt: Date.now(),
+        },
+        ...state.stories
+      ]
+    };
+  }),
+
  
   rentACarApplications: [],
 
@@ -1216,10 +1373,99 @@ export const useAppStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  listings: initialListings,
+  listings: initialListings.map((l) => {
+    // Add mock coordinates around Istanbul/Izmir/Ankara for location-based search
+    let lat = 41.0082;
+    let lon = 28.9784;
+    if (l.city === 'İstanbul') {
+      lat = 41.0082 + (Math.random() - 0.5) * 0.15;
+      lon = 28.9784 + (Math.random() - 0.5) * 0.15;
+    } else if (l.city === 'İzmir') {
+      lat = 38.4192 + (Math.random() - 0.5) * 0.2;
+      lon = 27.1287 + (Math.random() - 0.5) * 0.2;
+    } else if (l.city === 'Ankara') {
+      lat = 39.9334 + (Math.random() - 0.5) * 0.2;
+      lon = 32.8597 + (Math.random() - 0.5) * 0.2;
+    } else if (l.city === 'Muğla' || l.city === 'Bodrum') {
+      lat = 37.0344 + (Math.random() - 0.5) * 0.1;
+      lon = 27.4305 + (Math.random() - 0.5) * 0.1;
+    } else if (l.city === 'Bursa') {
+      lat = 40.1885 + (Math.random() - 0.5) * 0.2;
+      lon = 29.0610 + (Math.random() - 0.5) * 0.2;
+    } else if (l.city === 'Antalya') {
+      lat = 36.8969 + (Math.random() - 0.5) * 0.2;
+      lon = 30.7133 + (Math.random() - 0.5) * 0.2;
+    } else {
+      lat = 41.0082 + (Math.random() - 0.5) * 0.3;
+      lon = 28.9784 + (Math.random() - 0.5) * 0.3;
+    }
+    return { ...l, latitude: lat, longitude: lon };
+  }),
   chats: initialChats,
+  reviews: [
+    {
+      id: 'rev_1',
+      sellerName: 'Buse Giyim',
+      authorName: 'Himmet Akar',
+      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      rating: 5,
+      comment: 'Trençkot harika çıktı, sıfır gibi tertemiz kokuyordu. Çok teşekkürler!',
+      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
+    },
+    {
+      id: 'rev_2',
+      sellerName: 'Mega Holding A.Ş.',
+      authorName: 'Buse Giyim',
+      authorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
+      rating: 5,
+      comment: 'Güvenilir kurumsal satıcı, kargo süper hızlı geldi ve ürün tam anlatıldığı gibiydi.',
+      createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
+    },
+    {
+      id: 'rev_3',
+      sellerName: 'Elif Dekor',
+      authorName: 'Himmet Akar',
+      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      rating: 4,
+      comment: 'Örme salıncak çok güzel ve sağlam ancak kargolama biraz yavaş oldu.',
+      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
+    }
+  ],
+  addReview: (review) => set((state) => ({
+    reviews: [
+      ...state.reviews,
+      {
+        ...review,
+        id: `rev_${Date.now()}`,
+        createdAt: new Date().toLocaleDateString('tr-TR')
+      }
+    ]
+  })),
+  compareList: [],
+  addToCompareList: (listing) => set((state) => {
+    if (state.compareList.some((c) => c.id === listing.id)) return state;
+    if (state.compareList.length >= 3) {
+      Alert.alert('Limit Sınırı', 'Aynı anda en fazla 3 ilanı karşılaştırabilirsiniz.');
+      return state;
+    }
+    return { compareList: [...state.compareList, listing] };
+  }),
+  removeFromCompareList: (id) => set((state) => ({
+    compareList: state.compareList.filter((c) => c.id !== id),
+  })),
+  clearCompareList: () => set({ compareList: [] }),
   activeChatId: null,
   cart: [],
+  notifications: [
+    {
+      id: 'notif_welcome',
+      userId: 'all',
+      title: 'Mezatliyoruz Uygulamasına Hoş Geldiniz! 🚀',
+      message: 'Canlı mezatlar, bit pazarı ve üreticiden tüketiciye doğrudan satış özellikleri ile yayındayız.',
+      createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      isRead: false
+    }
+  ],
 
   addToCart: (listingId) => set((state) => {
     const listing = state.listings.find((l) => l.id === listingId);
@@ -1233,6 +1479,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
       return { cart: [...state.cart, { listing, quantity: 1 }] };
     }
   }),
+
+
+
+
 
   removeFromCart: (listingId) => set((state) => ({
     cart: state.cart.filter((item) => item.listing.id !== listingId)
@@ -1380,9 +1630,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
     })
   })),
 
-  createChat: (listingId) => {
+  createChat: (listingId, fromSellerProfile) => {
     const state = get();
-    const existingChat = state.chats.find((c) => c.listingId === listingId);
+    const existingChat = state.chats.find((c) => c.listingId === listingId && c.fromSellerProfile === fromSellerProfile);
     if (existingChat) {
       return existingChat.id;
     }
@@ -1398,11 +1648,12 @@ export const useAppStore = create<StoreState>((set, get) => ({
       listingImage: listing.photos[0],
       otherPartyName: listing.sellerName,
       otherPartyAvatar: listing.sellerAvatar,
+      fromSellerProfile: fromSellerProfile,
       messages: [
         {
           id: `msg_welcome`,
           senderId: 'system',
-          text: `"${listing.title}" ilanı için sohbet başladı.`,
+          text: fromSellerProfile ? 'Sohbet başladı.' : `"${listing.title}" ilanı için sohbet başladı.`,
           timestamp: new Date(),
           type: 'text',
         }
@@ -1432,6 +1683,154 @@ export const useAppStore = create<StoreState>((set, get) => ({
       stories: state.stories.filter((story) => now - story.createdAt < twentyFourHours)
     };
   }),
+  addOrder: (order) => {
+    const state = get();
+    // Recalculate secure server-side totalAmount using DB prices
+    const secureTotalAmount = order.items.reduce((sum, item) => {
+      const dbListing = state.listings.find(l => l.id === item.listing.id);
+      const actualPrice = dbListing ? dbListing.price : item.listing.price;
+      return sum + actualPrice * item.quantity;
+    }, 0);
+
+    const generatedId = 'MZ-' + Math.floor(100000 + Math.random() * 900000);
+    const newOrder: Order = {
+      ...order,
+      totalAmount: secureTotalAmount,
+      id: generatedId,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    
+    const listing = order.items[0].listing;
+    const existingChat = state.chats.find(c => c.listingId === listing.id);
+    const chatId = existingChat ? existingChat.id : `chat_${Date.now()}`;
+    
+    if (!existingChat) {
+      const newChat: Chat = {
+        id: chatId,
+        listingId: listing.id,
+        listingTitle: listing.title,
+        listingImage: listing.photos[0],
+        otherPartyName: listing.sellerName,
+        otherPartyAvatar: listing.sellerAvatar,
+        messages: [
+          {
+            id: `msg_welcome`,
+            senderId: 'system',
+            text: `"${listing.title}" ilanı için sohbet başladı.`,
+            timestamp: new Date(),
+            type: 'text',
+          }
+        ]
+      };
+      set(s => ({ chats: [...s.chats, newChat] }));
+    }
+
+    const newMsg: Message = {
+      id: `msg_order_${Date.now()}`,
+      senderId: 'system',
+      text: `🛒 YENİ SİPARİŞ! Sipariş No: ${generatedId}\nÜrün: ${listing.title}\nAdet: ${order.items[0].quantity}\nAlıcı: ${order.buyerName}\nAdres: ${order.buyerAddress}\nDurum: Sipariş Alındı (Ödeme onaylandı).`,
+      timestamp: new Date(),
+      type: 'text',
+    };
+    
+    set(s => {
+      // Find seller ID
+      let sellerId = 'demo_seller_mega_id';
+      Object.values(s.accounts).forEach((acc: any) => {
+        ['seller', 'user', 'super_admin'].forEach((role) => {
+          const prof = acc[role];
+          if (prof && (prof.shopName === listing.sellerName || prof.name === listing.sellerName)) {
+            sellerId = prof.id;
+          }
+        });
+      });
+
+      const sNotif: Notification = {
+        id: `notif_s_${Date.now()}`,
+        userId: sellerId,
+        title: 'Yeni Sipariş Alındı! 🛒',
+        message: `"${listing.title}" ürünü için yeni bir sipariş aldınız. Sipariş No: ${generatedId}`,
+        createdAt: new Date().toISOString(),
+        isRead: false
+      };
+
+      const bNotif: Notification = {
+        id: `notif_b_${Date.now()}`,
+        userId: order.buyerId,
+        title: 'Siparişiniz Alındı! 🎉',
+        message: `Siparişiniz başarıyla alındı. Sipariş No: ${generatedId}`,
+        createdAt: new Date().toISOString(),
+        isRead: false
+      };
+
+      return {
+        orders: [newOrder, ...s.orders],
+        chats: s.chats.map(c => c.id === chatId ? { ...c, messages: [...c.messages, newMsg] } : c),
+        notifications: [sNotif, bNotif, ...s.notifications]
+      };
+    });
+
+    return generatedId;
+  },
+
+  updateOrderStatus: (orderId, status, trackingNumber) => set((state) => {
+    const updatedOrders = state.orders.map((o) => {
+      if (o.id === orderId) {
+        return {
+          ...o,
+          status,
+          trackingNumber: trackingNumber !== undefined ? trackingNumber : o.trackingNumber,
+        };
+      }
+      return o;
+    });
+
+    const targetOrder = state.orders.find(o => o.id === orderId);
+    if (targetOrder) {
+      const listingId = targetOrder.items[0].listing.id;
+      const chat = state.chats.find(c => c.listingId === listingId);
+      
+      let statusStr = '';
+      if (status === 'processing') statusStr = 'Siparişiniz satıcı tarafından onaylandı ve işleme alındı.';
+      else if (status === 'shipped') statusStr = `Siparişiniz kargoya verildi!\nKargo Takip No: ${trackingNumber || ''}`;
+      else if (status === 'completed') statusStr = 'Siparişiniz tamamlandı. Bizi tercih ettiğiniz için teşekkür ederiz!';
+
+      const statusTitle = status === 'processing' ? 'Siparişiniz Onaylandı ⚙️' : status === 'shipped' ? 'Siparişiniz Kargolandı 🚚' : 'Siparişiniz Tamamlandı ✅';
+
+      const statusNotif: Notification = {
+        id: `notif_${Date.now()}_status`,
+        userId: targetOrder.buyerId,
+        title: statusTitle,
+        message: statusStr,
+        createdAt: new Date().toISOString(),
+        isRead: false
+      };
+
+      if (chat) {
+        const updateMsg: Message = {
+          id: `msg_status_${Date.now()}`,
+          senderId: 'system',
+          text: `🔔 SİPARİŞ DURUM GÜNCELLEMESİ (No: ${orderId})\nYeni Durum: ${statusStr}`,
+          timestamp: new Date(),
+          type: 'text',
+        };
+
+        return {
+          orders: updatedOrders,
+          chats: state.chats.map(c => c.id === chat.id ? { ...c, messages: [...c.messages, updateMsg] } : c),
+          notifications: [statusNotif, ...state.notifications]
+        };
+      } else {
+        return {
+          orders: updatedOrders,
+          notifications: [statusNotif, ...state.notifications]
+        };
+      }
+    }
+
+    return { orders: updatedOrders };
+  }),
 
   addListing: (newListing) => set((state) => {
     const listingWithId: Listing = {
@@ -1444,5 +1843,177 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return {
       listings: [listingWithId, ...state.listings]
     };
-  })
+  }),
+
+  addNotification: (notification) => set((state) => {
+    const newNotif: Notification = {
+      ...notification,
+      id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: new Date().toISOString(),
+      isRead: false
+    };
+
+    if (Platform.OS !== 'web') {
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: newNotif.title,
+          body: newNotif.message,
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+        trigger: null,
+      }).catch(err => console.warn('Error scheduling local notification:', err));
+    }
+
+    return {
+      notifications: [newNotif, ...state.notifications]
+    };
+  }),
+
+  sendSystemNotificationToAll: (title, message) => set((state) => {
+    const newNotif: Notification = {
+      id: `notif_${Date.now()}_all`,
+      userId: 'all',
+      title,
+      message,
+      createdAt: new Date().toISOString(),
+      isRead: false
+    };
+
+    if (Platform.OS !== 'web') {
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: newNotif.title,
+          body: newNotif.message,
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+        trigger: null,
+      }).catch(err => console.warn('Error scheduling global notification:', err));
+    }
+
+    return {
+      notifications: [newNotif, ...state.notifications]
+    };
+  }),
+
+  markNotificationAsRead: (notificationId) => set((state) => ({
+    notifications: state.notifications.map((n) =>
+      n.id === notificationId ? { ...n, isRead: true } : n
+    )
+  })),
+
+  clearNotifications: () => set({ notifications: [] }),
+
+  serverCalculateCartTotal: (cartItems) => {
+    const dbListings = get().listings;
+    const chats = get().chats;
+    const verifiedItems = cartItems.map(item => {
+      const dbListing = dbListings.find(l => l.id === item.listingId);
+      if (!dbListing) {
+        throw new Error(`Ürün bulunamadı: ${item.listingId}`);
+      }
+
+      // Check if there is an accepted chat offer for this listing
+      const matchingChat = chats.find(c => c.listingId === item.listingId);
+      let activePrice = dbListing.price;
+      if (matchingChat) {
+        const acceptedOffer = matchingChat.messages.find(m => m.type === 'offer' && m.offerStatus === 'accepted');
+        if (acceptedOffer && acceptedOffer.offerAmount) {
+          activePrice = acceptedOffer.offerAmount;
+        }
+      }
+
+      return {
+        listing: {
+          ...dbListing,
+          price: activePrice
+        },
+        quantity: item.quantity,
+        price: activePrice
+      };
+    });
+
+    const subtotal = verifiedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const shipping = 0;
+    const total = subtotal + shipping;
+
+    return {
+      items: verifiedItems,
+      subtotal,
+      shipping,
+      total,
+      verificationToken: `VERIFIED_${total}_${Date.now()}`
+    };
+  },
+
+  serverValidateUploadedFile: (fileName, fileSize, mimeType) => {
+    const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+    if (fileSize > maxSizeBytes) {
+      return {
+        success: false,
+        error: 'Güvenlik Uyarısı: Dosya boyutu 10 MB limitini aşıyor!'
+      };
+    }
+
+    const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov'];
+    const lowerName = fileName.toLowerCase();
+    const hasAllowedExtension = allowedExtensions.some(ext => lowerName.endsWith(ext));
+
+    const allowedMimeTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime'];
+    const isMimeTypeAllowed = mimeType ? allowedMimeTypes.includes(mimeType) : true;
+
+    if (!hasAllowedExtension || !isMimeTypeAllowed) {
+      return {
+        success: false,
+        error: 'Güvenlik Uyarısı: Desteklenmeyen dosya formatı! (Sadece PDF, JPG, JPEG, PNG, WEBP, MP4, MOV yüklenebilir)'
+      };
+    }
+
+    return { success: true };
+  },
+
+  savedCards: [
+    { id: 'card_demo_1', token: 'tok_visa_4242', cardSummary: 'Visa (**** 4242)', cardHolder: 'Himmet Akar' }
+  ],
+  addSavedCard: (card) => set((state) => ({
+    savedCards: [
+      ...state.savedCards,
+      { ...card, id: `card_${Date.now()}` }
+    ]
+  })),
+  deleteSavedCard: (id) => set((state) => ({
+    savedCards: state.savedCards.filter((c) => c.id !== id)
+  })),
+
+  isBiometricsEnabled: false,
+  setBiometricsEnabled: (enabled) => set({ isBiometricsEnabled: enabled }),
+
+  startWebSocketSim: () => {
+    if (wsBidInterval) return;
+
+    wsBidInterval = setInterval(() => {
+      const state = useAppStore.getState();
+      const activeAuction = state.listings.find(
+        (l) => l.type === 'auction' && l.timeLeft !== undefined && l.timeLeft > 0
+      );
+      if (!activeAuction) return;
+
+      // 30% chance of bid happening on this interval tick
+      if (Math.random() > 0.3) return;
+
+      const increment = 100 + Math.floor(Math.random() * 4) * 100;
+      const botBidAmount = activeAuction.price + increment;
+      const botNames = ['Kemal Yılmaz', 'Ayşe Demir', 'Murat Kaya', 'Selin Aksoy', 'Can Yıldız'];
+      const randomBot = botNames[Math.floor(Math.random() * botNames.length)];
+
+      state.placeBid(activeAuction.id, botBidAmount);
+
+      state.addNotification({
+        userId: 'all',
+        title: `Canlı Teklif! 🔨 (${activeAuction.title})`,
+        message: `${randomBot} adlı kullanıcı yeni bir teklif verdi: ${botBidAmount.toLocaleString('tr-TR')} TL!`
+      });
+    }, 15000);
+  }
 }));

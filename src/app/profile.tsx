@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -11,19 +11,26 @@ import {
   Pressable,
   TextInput,
   Alert,
+  Modal,
+  Animated as RNAnimated,
+  Switch,
 } from 'react-native';
-import { useAppStore } from '@/services/store';
+import { useAppStore, Listing } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { User, ShieldCheck, Heart, Clock, ChevronRight, Tag, Plus, LogOut, Car, ShieldAlert, Home, Key, Store, Briefcase } from 'lucide-react-native';
+import { User, ShieldCheck, Heart, Clock, ChevronRight, Tag, Plus, LogOut, Car, ShieldAlert, Home, Key, Store, Briefcase, Camera, X, Fingerprint, Star } from 'lucide-react-native';
 import { useRouter, useNavigation } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { formatTime } from '@/utils/time';
 
 const getUserBadges = (user: any) => {
   const state = useAppStore.getState();
   const accountPair = state.accounts[user.phone] || {};
-  const sellerAccount = accountPair.seller || {};
+  const sellerAccount = (accountPair.seller || {}) as any;
 
   const shopName = user.shopName || sellerAccount.shopName || '';
   const displayName = user.name || '';
@@ -95,7 +102,7 @@ export default function ProfileScreen() {
   const scheme = useColorScheme();
   const theme = Colors[scheme === 'dark' ? 'dark' : 'light'];
 
-  const { currentUser, listings, loginAccount, registerAccount, logoutAccount, rentACarApplications, approveRentACarApplication, rejectRentACarApplication } = useAppStore();
+  const { currentUser, listings, loginAccount, registerAccount, logoutAccount, rentACarApplications, approveRentACarApplication, rejectRentACarApplication, orders, updateOrderStatus, updateProfileAvatar, stories, addStory, isBiometricsEnabled, setBiometricsEnabled, addReview, reviews } = useAppStore();
 
   useEffect(() => {
     if (!currentUser) {
@@ -109,6 +116,132 @@ export default function ProfileScreen() {
     }
   }, [currentUser]);
 
+  const changeProfileAvatar = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert('İzin Gerekli', 'Galeriye erişmek için izin vermelisiniz.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const selectedImage = result.assets[0];
+        updateProfileAvatar(selectedImage.uri);
+        Alert.alert('Başarılı', 'Profil resminiz başarıyla güncellendi.');
+      }
+    } catch (error) {
+      console.error('Profil resmi seçme hatası:', error);
+      Alert.alert('Hata', 'Profil resmi seçilirken bir hata oluştu.');
+    }
+  };
+
+  const handleToggleBiometrics = async (value: boolean) => {
+    if (value) {
+      try {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        if (!hasHardware || !isEnrolled) {
+          Alert.alert("Güvenlik Hatası", "Cihazınızda Face ID / Parmak İzi bulunamadı veya etkinleştirilmedi.");
+          return;
+        }
+
+        const result = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Biyometrik doğrulamayı etkinleştirmek için parmak izinizi veya yüzünüzü taratın.',
+          fallbackLabel: 'Şifre Kullan',
+        });
+
+        if (result.success) {
+          setBiometricsEnabled(true);
+          Alert.alert("Başarılı", "Biyometrik doğrulama başarıyla aktifleştirildi! 🛡️");
+        }
+      } catch (err) {
+        console.warn('Biometric setup failed:', err);
+        Alert.alert("Hata", "Biyometrik doğrulama başlatılırken hata oluştu.");
+      }
+    } else {
+      setBiometricsEnabled(false);
+    }
+  };
+
+  // Personal profile stories logic
+  const personalStories = currentUser ? (stories || []).filter(s => s.sellerId === currentUser.id || s.sellerName === currentUser.name) : [];
+  const hasStories = personalStories.length > 0;
+
+  const [storyViewerVisible, setStoryViewerVisible] = useState(false);
+  const [activeStoryIndex, setActiveStoryIndex] = useState(0);
+  const storyProgress = useRef(new RNAnimated.Value(0)).current;
+  const [storyListingSelect, setStoryListingSelect] = useState<Listing | null>(null);
+
+  // Story video player helper inside this component
+  const StoryVideoPlayer = ({ url, isActive }: { url: string; isActive: boolean }) => {
+    const player = useVideoPlayer(url, (p) => {
+      p.loop = false;
+      p.muted = false;
+    });
+
+    useEffect(() => {
+      if (isActive) {
+        player.play();
+      } else {
+        player.pause();
+      }
+    }, [isActive, player]);
+
+    return (
+      <VideoView
+        player={player}
+        style={{ width: '100%', height: '100%', minHeight: 300 }}
+        nativeControls={false}
+        contentFit="contain"
+      />
+    );
+  };
+
+  // Story viewer timing animation
+  useEffect(() => {
+    let animation: any;
+    if (storyViewerVisible && personalStories.length > 0) {
+      storyProgress.setValue(0);
+      animation = RNAnimated.timing(storyProgress, {
+        toValue: 1,
+        duration: 5000, // 5 seconds per story
+        useNativeDriver: false,
+      });
+      animation.start(({ finished }: any) => {
+        if (finished) {
+          handleNextStory();
+        }
+      });
+    } else {
+      storyProgress.setValue(0);
+    }
+    return () => {
+      if (animation) animation.stop();
+    };
+  }, [storyViewerVisible, activeStoryIndex]);
+
+  const handleNextStory = () => {
+    if (activeStoryIndex < personalStories.length - 1) {
+      setActiveStoryIndex(prev => prev + 1);
+    } else {
+      setStoryViewerVisible(false);
+      setActiveStoryIndex(0);
+    }
+  };
+
+  const handlePrevStory = () => {
+    if (activeStoryIndex > 0) {
+      setActiveStoryIndex(prev => prev - 1);
+    }
+  };
+
   // Auth Form States
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authStep, setAuthStep] = useState<'login' | 'register' | 'sms'>('login');
@@ -117,6 +250,33 @@ export default function ProfileScreen() {
   const [authOtpCode, setAuthOtpCode] = useState('');
   const [sentOtpCode, setSentOtpCode] = useState('');
   const [authError, setAuthError] = useState('');
+  const [trackingInputs, setTrackingInputs] = useState<{ [orderId: string]: string }>({});
+  const [reviewedOrders, setReviewedOrders] = useState<string[]>([]);
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [selectedOrderForReview, setSelectedOrderForReview] = useState<any | null>(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
+
+  const handleOpenReviewModal = (order: any) => {
+    setSelectedOrderForReview(order);
+    setReviewRating(5);
+    setReviewComment('');
+    setReviewModalVisible(true);
+  };
+
+  const handleSubmitReview = () => {
+    if (!selectedOrderForReview || !currentUser) return;
+    addReview({
+      sellerName: selectedOrderForReview.sellerName,
+      authorName: currentUser.name,
+      authorAvatar: currentUser.avatar,
+      rating: reviewRating,
+      comment: reviewComment.trim() || 'Harika bir alışverişti, teşekkürler!'
+    });
+    setReviewedOrders(prev => [...prev, selectedOrderForReview.id]);
+    setReviewModalVisible(false);
+    Alert.alert('Teşekkürler!', 'Değerlendirmeniz başarıyla satıcı profiline kaydedildi.');
+  };
 
   const formatPhoneNumber = (text: string) => {
     const cleaned = text.replace(/\D/g, '');
@@ -422,9 +582,45 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         {/* Profile Card */}
         <View style={[styles.profileCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
-          <View style={[styles.avatarContainer, { borderColor: theme.gold }]}>
-            <Image source={{ uri: currentUser.avatar }} style={styles.avatar} />
-          </View>
+          {hasStories ? (
+            <View style={styles.storyAvatarWrapper}>
+              <Pressable 
+                onPress={() => { setStoryViewerVisible(true); setActiveStoryIndex(0); }}
+                style={({ pressed }) => [
+                  pressed && { opacity: 0.85 }
+                ]}
+              >
+                <LinearGradient
+                  colors={['#833ab4', '#fd1d1d', '#fcb045']}
+                  style={styles.storyRingGradient}
+                >
+                  <View style={[styles.avatarContainerStory, { backgroundColor: cardBg }]}>
+                    <Image source={{ uri: currentUser.avatar }} style={styles.avatar} />
+                  </View>
+                </LinearGradient>
+              </Pressable>
+              <Pressable 
+                onPress={changeProfileAvatar}
+                style={[styles.cameraOverlayStory, { backgroundColor: theme.gold, borderColor: isDark ? '#111A30' : '#FFFFFF' }]}
+              >
+                <Camera size={11} color="#0B132B" strokeWidth={2.5} />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable 
+              onPress={changeProfileAvatar}
+              style={({ pressed }) => [
+                styles.avatarContainer, 
+                { borderColor: theme.gold },
+                pressed && { opacity: 0.85 }
+              ]}
+            >
+              <Image source={{ uri: currentUser.avatar }} style={styles.avatar} />
+              <View style={[styles.cameraOverlay, { backgroundColor: theme.gold, borderColor: isDark ? '#111A30' : '#FFFFFF' }]}>
+                <Camera size={12} color="#0B132B" strokeWidth={2.5} />
+              </View>
+            </Pressable>
+          )}
           <View style={styles.profileInfo}>
             <View style={styles.nameRow}>
               <Text style={[styles.userName, { color: theme.text }]}>
@@ -450,18 +646,20 @@ export default function ProfileScreen() {
             </Text>
 
             <View style={styles.badgesRow}>
-              <Pressable
-                onPress={() => Alert.alert("Doğrulanmış Hesap", "Bu kullanıcının kimliği Bakanlık entegrasyonu ve resmi belgelerle doğrulanmıştır.", [{ text: 'Tamam' }])}
-                style={[styles.badgeItem, {
-                  backgroundColor: isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)',
-                  borderColor: isDark ? 'rgba(255, 107, 0, 0.25)' : 'rgba(184, 134, 11, 0.2)'
-                }]}
-              >
-                <ShieldCheck size={12} color={isDark ? theme.gold : theme.goldAccent} />
-                <Text style={[styles.badgeText, { color: isDark ? theme.gold : theme.goldAccent }]}>
-                  Doğrulanmış Hesap
-                </Text>
-              </Pressable>
+              {currentUser.verified && getUserBadges(currentUser).length === 0 && (
+                <Pressable
+                  onPress={() => Alert.alert("Doğrulanmış Hesap", "Bu kullanıcının kimliği Bakanlık entegrasyonu ve resmi belgelerle doğrulanmıştır.", [{ text: 'Tamam' }])}
+                  style={[styles.badgeItem, {
+                    backgroundColor: isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)',
+                    borderColor: isDark ? 'rgba(255, 107, 0, 0.25)' : 'rgba(184, 134, 11, 0.2)'
+                  }]}
+                >
+                  <ShieldCheck size={12} color={isDark ? theme.gold : theme.goldAccent} />
+                  <Text style={[styles.badgeText, { color: isDark ? theme.gold : theme.goldAccent }]}>
+                    Doğrulanmış Hesap
+                  </Text>
+                </Pressable>
+              )}
 
               <Pressable
                 onPress={() => Alert.alert("Telefon Doğrulanmış", "Bu kullanıcının cep telefonu numarası SMS OTP doğrulaması ile onaylanmıştır.", [{ text: 'Tamam' }])}
@@ -473,19 +671,6 @@ export default function ProfileScreen() {
                 <ShieldCheck size={12} color={isDark ? '#34D399' : '#059669'} />
                 <Text style={[styles.badgeText, { color: isDark ? '#34D399' : '#059669' }]}>Telefon Doğrulanmış</Text>
               </Pressable>
-
-              {currentUser.isRentACarApproved && (
-                <Pressable
-                  onPress={() => Alert.alert("🔑 Kurumsal Oto Kiralama", "Bu üye resmi oto kiralama ruhsatına, NACE kodu onaylı vergi levhasına ve e-Devlet entegrasyonuna sahip kurumsal bir araç kiralama şirketidir.", [{ text: 'Tamam' }])}
-                  style={[styles.badgeItem, {
-                    backgroundColor: isDark ? 'rgba(139, 92, 246, 0.12)' : 'rgba(139, 92, 246, 0.08)',
-                    borderColor: isDark ? 'rgba(139, 92, 246, 0.25)' : 'rgba(109, 40, 217, 0.2)'
-                  }]}
-                >
-                  <Car size={12} color={isDark ? '#A78BFA' : '#6D28D9'} />
-                  <Text style={[styles.badgeText, { color: isDark ? '#A78BFA' : '#6D28D9' }]}>Onaylı Rent a Car</Text>
-                </Pressable>
-              )}
 
               {currentUser.rentACarApplicationStatus === 'pending' && (
                 <Pressable
@@ -513,7 +698,7 @@ export default function ProfileScreen() {
                   >
                     <Image
                       source={badge.image}
-                      style={{ width: 14, height: 15, resizeMode: 'contain' }}
+                      style={{ width: 36, height: 40, resizeMode: 'contain' }}
                     />
                   </Pressable>
                 ));
@@ -831,6 +1016,257 @@ export default function ProfileScreen() {
           </View>
         )}
 
+        {/* BUYER ORDERS SECTION */}
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionHeaderLine, { backgroundColor: theme.gold }]} />
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>SİPARİŞLERİM</Text>
+          <View style={[styles.countBadge, { backgroundColor: theme.gold }]}>
+            <Text style={styles.countBadgeText}>{orders.filter(o => o.buyerId === currentUser?.id).length}</Text>
+          </View>
+        </View>
+
+        <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
+          {(() => {
+            const buyerOrders = orders.filter(o => o.buyerId === currentUser?.id);
+            if (buyerOrders.length === 0) {
+              return (
+                <View style={styles.emptyContainer}>
+                  <Text style={[styles.emptyText, { color: theme.text, textAlign: 'center' }]}>Henüz bir sipariş vermediniz.</Text>
+                </View>
+              );
+            }
+            return (
+              <View style={{ gap: 12 }}>
+                {buyerOrders.map((order) => (
+                  <View key={order.id} style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: itemBorder, backgroundColor: itemBg, gap: 8 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 13 }}>{order.id}</Text>
+                      <View style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 4,
+                        backgroundColor: order.status === 'pending' ? 'rgba(245, 158, 11, 0.12)' : order.status === 'processing' ? 'rgba(59, 130, 246, 0.12)' : order.status === 'shipped' ? 'rgba(139, 92, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)'
+                      }}>
+                        <Text style={{
+                          fontSize: 10,
+                          fontWeight: '700',
+                          color: order.status === 'pending' ? '#F59E0B' : order.status === 'processing' ? '#3B82F6' : order.status === 'shipped' ? '#8B5CF6' : '#10B981'
+                        }}>
+                          {order.status === 'pending' ? 'Ödeme Alındı' : order.status === 'processing' ? 'Hazırlanıyor' : order.status === 'shipped' ? 'Kargoya Verildi' : 'Tamamlandı'}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                      <Image
+                        source={typeof order.items[0].listing.photos[0] === 'number' ? order.items[0].listing.photos[0] : { uri: order.items[0].listing.photos[0] }}
+                        style={{ width: 44, height: 44, borderRadius: 6 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 13 }} numberOfLines={1}>
+                          {order.items[0].listing.title}
+                        </Text>
+                        <Text style={{ color: theme.textSecondary, fontSize: 11 }}>
+                          Adet: {order.items[0].quantity} • Tutar: {order.totalAmount.toLocaleString('tr-TR')} TL
+                        </Text>
+                      </View>
+                    </View>
+
+                    {order.trackingNumber && (
+                      <View style={{ padding: 8, borderRadius: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#F1F5F9', borderLeftWidth: 3, borderLeftColor: '#8B5CF6' }}>
+                        <Text style={{ fontSize: 11, color: theme.text, fontWeight: '600' }}>
+                          📦 Kargo Takip No: {order.trackingNumber}
+                        </Text>
+                      </View>
+                    )}
+
+                    {order.status === 'completed' && (
+                      <Pressable
+                        style={{
+                          backgroundColor: 'rgba(255, 107, 0, 0.1)',
+                          borderColor: theme.gold,
+                          borderWidth: 1,
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginTop: 4,
+                          flexDirection: 'row',
+                          gap: 6
+                        }}
+                        onPress={() => handleOpenReviewModal(order)}
+                        disabled={reviewedOrders.includes(order.id)}
+                      >
+                        <Star size={13} color={theme.gold} fill={reviewedOrders.includes(order.id) ? theme.gold : 'transparent'} />
+                        <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold' }}>
+                          {reviewedOrders.includes(order.id) ? 'Değerlendirildi' : 'Satıcıyı Değerlendir'}
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
+                ))}
+              </View>
+            );
+          })()}
+        </View>
+
+        {/* SELLER ORDERS (SALES) SECTION */}
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionHeaderLine, { backgroundColor: theme.gold }]} />
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>GELEN SİPARİŞLER (SATIŞLARINIZ)</Text>
+          <View style={[styles.countBadge, { backgroundColor: theme.gold }]}>
+            <Text style={styles.countBadgeText}>{orders.filter(o => 
+              o.items.some(item => 
+                item.listing.sellerName === currentUser?.name || 
+                (currentUser?.shopName && item.listing.sellerName === currentUser.shopName)
+              )
+            ).length}</Text>
+          </View>
+        </View>
+
+        <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
+          {(() => {
+            const sellerOrders = orders.filter(o => 
+              o.items.some(item => 
+                item.listing.sellerName === currentUser?.name || 
+                (currentUser?.shopName && item.listing.sellerName === currentUser.shopName)
+              )
+            );
+            if (sellerOrders.length === 0) {
+              return (
+                <View style={styles.emptyContainer}>
+                  <Text style={[styles.emptyText, { color: theme.text, textAlign: 'center' }]}>Henüz bir sipariş almadınız.</Text>
+                </View>
+              );
+            }
+            return (
+              <View style={{ gap: 12 }}>
+                {sellerOrders.map((order) => {
+                  const trackingValue = trackingInputs[order.id] || '';
+                  return (
+                    <View key={order.id} style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: itemBorder, backgroundColor: itemBg, gap: 8 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 13 }}>{order.id}</Text>
+                        <View style={{
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 4,
+                          backgroundColor: order.status === 'pending' ? 'rgba(245, 158, 11, 0.12)' : order.status === 'processing' ? 'rgba(59, 130, 246, 0.12)' : order.status === 'shipped' ? 'rgba(139, 92, 246, 0.12)' : 'rgba(16, 185, 129, 0.12)'
+                        }}>
+                          <Text style={{
+                            fontSize: 10,
+                            fontWeight: '700',
+                            color: order.status === 'pending' ? '#F59E0B' : order.status === 'processing' ? '#3B82F6' : order.status === 'shipped' ? '#8B5CF6' : '#10B981'
+                          }}>
+                            {order.status === 'pending' ? 'Yeni Sipariş' : order.status === 'processing' ? 'İşleme Alındı' : order.status === 'shipped' ? 'Kargoda' : 'Tamamlandı'}
+                          </Text>
+                        </View>
+                      </View>
+                      
+                      <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                        <Image
+                          source={typeof order.items[0].listing.photos[0] === 'number' ? order.items[0].listing.photos[0] : { uri: order.items[0].listing.photos[0] }}
+                          style={{ width: 44, height: 44, borderRadius: 6 }}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 13 }} numberOfLines={1}>
+                            {order.items[0].listing.title}
+                          </Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 11 }}>
+                            Alıcı: {order.buyerName} ({order.buyerPhone})
+                          </Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 11 }} numberOfLines={1}>
+                            Adres: {order.buyerAddress}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {order.status === 'pending' && (
+                        <Pressable
+                          style={{ height: 36, borderRadius: 6, backgroundColor: '#3B82F6', alignItems: 'center', justifyContent: 'center', marginTop: 4 }}
+                          onPress={() => {
+                            updateOrderStatus(order.id, 'processing');
+                            Alert.alert("Başarılı", "Sipariş işleme alındı! Müşteriye bildirim gönderildi.");
+                          }}
+                        >
+                          <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 }}>Siparişi İşleme Al</Text>
+                        </Pressable>
+                      )}
+
+                      {order.status === 'processing' && (
+                        <View style={{ gap: 6, marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, color: theme.textSecondary, fontWeight: '600' }}>Kargo Takip No Giriniz (Zorunlu):</Text>
+                          <TextInput
+                            style={{
+                              height: 38,
+                              borderWidth: 1,
+                              borderColor: theme.backgroundSelected,
+                              borderRadius: 6,
+                              paddingHorizontal: 10,
+                              fontSize: 12,
+                              color: theme.text,
+                              backgroundColor: theme.background
+                            }}
+                            placeholder="Örn: MNG12345678"
+                            placeholderTextColor={theme.textSecondary}
+                            value={trackingValue}
+                            onChangeText={(txt) => setTrackingInputs(prev => ({ ...prev, [order.id]: txt }))}
+                          />
+                          <Pressable
+                            style={{
+                              height: 36,
+                              borderRadius: 6,
+                              backgroundColor: trackingValue.trim() ? '#8B5CF6' : 'rgba(255,255,255,0.05)',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderWidth: trackingValue.trim() ? 0 : 1,
+                              borderColor: theme.backgroundSelected
+                            }}
+                            disabled={!trackingValue.trim()}
+                            onPress={() => {
+                              if (!trackingValue.trim()) {
+                                Alert.alert("Hata", "Lütfen önce kargo takip numarası girin.");
+                                return;
+                              }
+                              updateOrderStatus(order.id, 'shipped', trackingValue.trim());
+                              Alert.alert("Başarılı", "Sipariş kargoya verildi! Takip numarası kaydedildi ve müşteriye bildirim gönderildi.");
+                            }}
+                          >
+                            <Text style={{ color: trackingValue.trim() ? '#FFFFFF' : theme.textSecondary, fontWeight: 'bold', fontSize: 12 }}>
+                              Kargoya Verildi Olarak İşaretle
+                            </Text>
+                          </Pressable>
+                        </View>
+                      )}
+
+                      {order.status === 'shipped' && (
+                        <View style={{ gap: 6, marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, color: theme.textSecondary }}>Takip Numarası: {order.trackingNumber}</Text>
+                          <Pressable
+                            style={{ height: 36, borderRadius: 6, backgroundColor: '#10B981', alignItems: 'center', justifyContent: 'center' }}
+                            onPress={() => {
+                              updateOrderStatus(order.id, 'completed');
+                              Alert.alert("Başarılı", "Sipariş tamamlandı olarak işaretlendi! Müşteriye bildirim gönderildi.");
+                            }}
+                          >
+                            <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 }}>Siparişi Tamamla</Text>
+                          </Pressable>
+                        </View>
+                      )}
+
+                      {order.status === 'completed' && (
+                        <View style={{ padding: 6, borderRadius: 6, backgroundColor: 'rgba(16, 185, 129, 0.08)', borderWidth: 1, borderColor: '#10B981', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 11, color: '#10B981', fontWeight: '700' }}>✓ İşlem Başarıyla Tamamlandı</Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
+        </View>
+
         {/* Active Listings Header */}
         <View style={styles.sectionHeader}>
           <View style={[styles.sectionHeaderLine, { backgroundColor: theme.gold }]} />
@@ -942,6 +1378,26 @@ export default function ProfileScreen() {
                         </View>
                       )}
                     </View>
+                    <Pressable
+                      style={{
+                        alignSelf: 'flex-start',
+                        backgroundColor: 'rgba(255, 107, 0, 0.1)',
+                        borderColor: theme.gold,
+                        borderWidth: 1,
+                        paddingVertical: 4,
+                        paddingHorizontal: 8,
+                        borderRadius: 4,
+                        marginTop: 6,
+                      }}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        setStoryListingSelect(item);
+                      }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.gold }}>
+                        Hikayene Ekle ⚡
+                      </Text>
+                    </Pressable>
                   </View>
 
                   <ChevronRight size={18} color={theme.textSecondary} style={{ marginRight: 4 }} />
@@ -950,7 +1406,330 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
+
+        {/* GÜVENLİK AYARLARI SECTION */}
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionHeaderLine, { backgroundColor: theme.gold }]} />
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>GÜVENLİK AYARLARI</Text>
+        </View>
+
+        <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}>
+            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center', flex: 1, paddingRight: 16 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255, 107, 0, 0.1)', alignItems: 'center', justifyContent: 'center' }}>
+                <Fingerprint size={20} color={theme.gold} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: 'bold', color: theme.text }}>
+                  Biyometrik Kimlik Doğrulama
+                </Text>
+                <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>
+                  Teklif verirken veya ödeme yaparken Face ID / Parmak İzi doğrulaması iste.
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={isBiometricsEnabled}
+              onValueChange={handleToggleBiometrics}
+              trackColor={{ false: isDark ? '#1E293B' : '#E2E8F0', true: theme.gold }}
+              thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
+            />
+          </View>
+        </View>
       </ScrollView>
+
+      {/* Story Viewer Modal */}
+      <Modal
+        visible={storyViewerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStoryViewerVisible(false)}
+      >
+        <View style={styles.storyViewerBackdrop}>
+          {personalStories.length > 0 && activeStoryIndex < personalStories.length && (
+            <View style={styles.storyViewerContainer}>
+              {/* Full Screen Media (Image or Video) */}
+              {(() => {
+                const currentStory = personalStories[activeStoryIndex];
+                const isVideo = currentStory.mediaUrl.toLowerCase().endsWith('.mp4') || 
+                                currentStory.mediaUrl.toLowerCase().endsWith('.mov') ||
+                                currentStory.mediaUrl.includes('.mp4?') ||
+                                currentStory.mediaUrl.includes('.mov?') ||
+                                currentStory.mediaType === 'video';
+                
+                if (isVideo) {
+                  return (
+                    <StoryVideoPlayer 
+                      url={currentStory.mediaUrl} 
+                      isActive={storyViewerVisible} 
+                    />
+                  );
+                }
+                return (
+                  <Image 
+                    source={{ uri: currentStory.mediaUrl }} 
+                    style={styles.storyViewerImage} 
+                  />
+                );
+              })()}
+
+              {/* Progress Indicators Bar */}
+              <View style={styles.storyProgressBarContainer}>
+                {personalStories.map((st, idx) => {
+                  const isPassed = idx < activeStoryIndex;
+                  const isCurrent = idx === activeStoryIndex;
+                  
+                  return (
+                    <View key={`prog_${idx}`} style={styles.storyProgressBarBackground}>
+                      <RNAnimated.View 
+                        style={[
+                          styles.storyProgressBarFill,
+                          {
+                            backgroundColor: '#FFFFFF',
+                            width: isPassed 
+                              ? '100%' 
+                              : isCurrent 
+                                ? storyProgress.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: ['0%', '100%']
+                                  }) as any
+                                : '0%'
+                          }
+                        ]}
+                      />
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Header User Info */}
+              <View style={styles.storyViewerHeader}>
+                <Image 
+                  source={{ uri: currentUser.avatar }} 
+                  style={styles.storyViewerAvatar} 
+                />
+                <Text style={styles.storyViewerUsername}>
+                  {currentUser.name}
+                </Text>
+                
+                <Pressable style={styles.storyViewerCloseBtn} onPress={() => setStoryViewerVisible(false)}>
+                  <X size={22} color="#FFFFFF" />
+                </Pressable>
+              </View>
+
+              {/* Bottom Actions */}
+              {personalStories[activeStoryIndex].productId && (
+                <View style={styles.storyViewerActions}>
+                  <Pressable 
+                    style={[styles.storyViewerBtn, { backgroundColor: 'rgba(255, 85, 0, 0.45)', borderColor: 'rgba(255, 85, 0, 0.6)', borderWidth: 1 }]}
+                    onPress={() => {
+                      const pid = personalStories[activeStoryIndex].productId;
+                      setStoryViewerVisible(false);
+                      router.push(`/product/${pid}`);
+                    }}
+                  >
+                    <Text style={styles.storyViewerBtnText}>ÜRÜNE GİT</Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* Left/Right Tap Areas */}
+              <View style={styles.storyTapContainer}>
+                <Pressable style={styles.storyTapLeft} onPress={handlePrevStory} />
+                <Pressable style={styles.storyTapRight} onPress={handleNextStory} />
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* Listing Photo Selector Modal for Story */}
+      <Modal
+        visible={storyListingSelect !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStoryListingSelect(null)}
+      >
+        <Pressable 
+          style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.6)', justifyContent: 'center', alignItems: 'center' }} 
+          onPress={() => setStoryListingSelect(null)}
+        >
+          <ThemedView 
+            type="backgroundElement" 
+            style={{
+              width: '90%',
+              maxWidth: 380,
+              borderRadius: 16,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: theme.backgroundSelected,
+            }}
+          >
+            <ThemedText style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 6, textAlign: 'center' }}>
+              Hikaye Görseli Seçin
+            </ThemedText>
+            <ThemedText style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 16, textAlign: 'center' }}>
+              İlanınızdaki görsellerden birine tıklayarak hikayenizde paylaşın. Hikayeniz doğrudan bu ürüne bağlanacaktır.
+            </ThemedText>
+            
+            {storyListingSelect && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingVertical: 8 }}>
+                {storyListingSelect.photos.map((photo: any, idx: number) => (
+                  <Pressable
+                    key={idx}
+                    onPress={() => {
+                      let mediaUrlStr = '';
+                      if (typeof photo === 'number') {
+                        try {
+                          const resolved = Image.resolveAssetSource(photo);
+                          mediaUrlStr = resolved.uri;
+                        } catch (e) {
+                          mediaUrlStr = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500';
+                        }
+                      } else {
+                        mediaUrlStr = photo;
+                      }
+
+                      addStory({
+                        sellerId: currentUser?.id || 'demo_seller',
+                        sellerName: currentUser?.name || 'Himmet Akar',
+                        sellerAvatar: currentUser?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200',
+                        mediaUrl: mediaUrlStr,
+                        mediaType: 'image',
+                        productId: storyListingSelect.id,
+                        productTitle: storyListingSelect.title,
+                      });
+                      setStoryListingSelect(null);
+                      Alert.alert("Başarılı", "İlanınızın görseli hikaye olarak paylaşıldı ve ürüne bağlandı! 🚀");
+                    }}
+                    style={{
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      borderWidth: 2,
+                      borderColor: theme.backgroundSelected,
+                    }}
+                  >
+                    <Image
+                      source={typeof photo === 'number' ? photo : { uri: photo }}
+                      style={{ width: 100, height: 120, resizeMode: 'cover' }}
+                    />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+            
+            <Pressable
+              onPress={() => setStoryListingSelect(null)}
+              style={{
+                marginTop: 16,
+                backgroundColor: theme.backgroundSelected,
+                paddingVertical: 10,
+                borderRadius: 8,
+                alignItems: 'center'
+              }}
+            >
+              <ThemedText style={{ fontSize: 13, fontWeight: 'bold' }}>İptal</ThemedText>
+            </Pressable>
+          </ThemedView>
+        </Pressable>
+      </Modal>
+
+      {/* REVIEW SUBMISSION MODAL */}
+      <Modal
+        visible={reviewModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setReviewModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <ThemedView
+            type="backgroundElement"
+            style={{
+              width: '90%',
+              maxWidth: 400,
+              borderRadius: 16,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: theme.gold,
+              gap: 16,
+            }}
+          >
+            <View style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Satıcıyı Değerlendir</ThemedText>
+              <Pressable onPress={() => setReviewModalVisible(false)}>
+                <X size={20} color={theme.text} />
+              </Pressable>
+            </View>
+
+            {selectedOrderForReview && (
+              <View style={{ gap: 4, alignItems: 'center' }}>
+                <Text style={{ color: theme.textSecondary, fontSize: 11 }}>DEĞERLENDİRİLEN SATICI</Text>
+                <Text style={{ color: theme.text, fontSize: 14, fontWeight: 'bold' }}>
+                  {selectedOrderForReview.sellerName}
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 11, fontStyle: 'italic', marginTop: 2, textAlign: 'center' }}>
+                  "{selectedOrderForReview.items[0].listing.title}"
+                </Text>
+              </View>
+            )}
+
+            {/* Star Rating Selectors */}
+            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginVertical: 8 }}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Pressable
+                  key={star}
+                  onPress={() => setReviewRating(star)}
+                  style={{ padding: 4 }}
+                >
+                  <Star
+                    size={32}
+                    color={theme.gold}
+                    fill={star <= reviewRating ? theme.gold : 'transparent'}
+                  />
+                </Pressable>
+              ))}
+            </View>
+
+            {/* Comment Input */}
+            <View style={{ gap: 6 }}>
+              <Text style={{ color: theme.textSecondary, fontSize: 12 }}>Yorumunuz (İsteğe Bağlı)</Text>
+              <TextInput
+                style={{
+                  height: 80,
+                  borderColor: theme.backgroundSelected,
+                  borderWidth: 1,
+                  borderRadius: 8,
+                  padding: 10,
+                  color: theme.text,
+                  backgroundColor: theme.background,
+                  fontSize: 13,
+                  textAlignVertical: 'top',
+                }}
+                placeholder="Alışveriş deneyiminiz nasıldı? (Örn: Hızlı kargo, ilgili satıcı...)"
+                placeholderTextColor={theme.textSecondary}
+                multiline
+                numberOfLines={3}
+                value={reviewComment}
+                onChangeText={setReviewComment}
+              />
+            </View>
+
+            <Pressable
+              style={{
+                backgroundColor: theme.gold,
+                paddingVertical: 12,
+                borderRadius: 8,
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 8,
+              }}
+              onPress={handleSubmitReview}
+            >
+              <Text style={{ color: '#000000', fontSize: 13, fontWeight: 'bold' }}>Değerlendirmeyi Gönder</Text>
+            </Pressable>
+          </ThemedView>
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -1233,6 +2012,174 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontSize: 12,
     textAlign: 'center',
+    fontWeight: 'bold',
+  },
+  cameraOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1,
+    elevation: 2,
+  },
+  storyAvatarWrapper: {
+    position: 'relative',
+  },
+  storyRingGradient: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    padding: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarContainerStory: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    padding: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraOverlayStory: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1,
+    elevation: 2,
+  },
+  storyViewerBackdrop: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storyViewerContainer: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+    backgroundColor: '#000000',
+  },
+  storyViewerImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'contain',
+  },
+  storyProgressBarContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 36,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    gap: 4,
+    zIndex: 10,
+  },
+  storyProgressBarBackground: {
+    flex: 1,
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 1.5,
+    overflow: 'hidden',
+  },
+  storyProgressBarFill: {
+    height: '100%',
+  },
+  storyViewerHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 76 : 52,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  storyViewerAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    marginRight: 10,
+  },
+  storyViewerUsername: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    flex: 1,
+  },
+  storyViewerCloseBtn: {
+    padding: 4,
+  },
+  storyTapContainer: {
+    position: 'absolute',
+    top: 100,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+  },
+  storyTapLeft: {
+    width: '30%',
+    height: '100%',
+  },
+  storyTapRight: {
+    width: '70%',
+    height: '100%',
+  },
+  storyViewerActions: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 12,
+    zIndex: 20,
+  },
+  storyViewerBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  storyViewerBtnText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingBottom: 10,
+  },
+  modalTitle: {
+    fontSize: 16,
     fontWeight: 'bold',
   },
 });
