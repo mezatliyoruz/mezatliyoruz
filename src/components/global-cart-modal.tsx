@@ -110,6 +110,47 @@ export default function GlobalCartModal() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [saveCardSecurely, setSaveCardSecurely] = useState(false);
 
+  // Debounced auto-fetch cargo offers
+  useEffect(() => {
+    if (checkoutStep !== 'shipping') return;
+    
+    // Validate inputs silently before fetching
+    const isNameValid = shippingName.trim().length >= 3;
+    const isPhoneValid = shippingPhone.replace(/\D/g, '').length >= 10;
+    const isCityValid = shippingCity.trim().length >= 2;
+    const isDistrictValid = shippingDistrict.trim().length >= 2;
+    const isAddressValid = shippingAddress.trim().length >= 5;
+
+    if (!isNameValid || !isPhoneValid || !isCityValid || !isDistrictValid || !isAddressValid) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoadingOffers(true);
+      setFormErrors(prev => { const copy = { ...prev }; delete copy.selectedOffer; return copy; });
+      try {
+        const offers = await CargoService.getOffers({
+          name: shippingName,
+          phone: shippingPhone,
+          city: shippingCity,
+          district: shippingDistrict,
+          address: shippingAddress
+        });
+        const sortedOffers = [...offers].sort((a, b) => a.price - b.price);
+        setCargoOffers(sortedOffers);
+        if (sortedOffers.length > 0) {
+          setSelectedOffer(sortedOffers[0]); // Auto-select cheapest offer
+        }
+      } catch (err) {
+        console.warn('Auto fetch cargo offers failed:', err);
+      } finally {
+        setLoadingOffers(false);
+      }
+    }, 600); // 600ms debounce
+
+    return () => clearTimeout(timer);
+  }, [shippingName, shippingPhone, shippingCity, shippingDistrict, shippingAddress, checkoutStep]);
+
   const cartSubtotal = cart.reduce((acc, item) => acc + item.listing.price * item.quantity, 0);
   const cartTotal = cartSubtotal + (selectedOffer ? selectedOffer.price : 0);
 

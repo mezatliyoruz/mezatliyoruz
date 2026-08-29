@@ -127,7 +127,7 @@ export default function ProfileScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = width > 768;
 
-  const { currentUser, listings, deleteListing, loginAccount, registerAccount, logoutAccount, rentACarApplications, approveRentACarApplication, rejectRentACarApplication, orders, updateOrderStatus, updateProfileAvatar, stories, addStory, isBiometricsEnabled, setBiometricsEnabled, addReview, reviews, createChat, setCartModalVisible, setCheckoutStep, adPricing, updateAdPricing, ads, deleteAd, createAd, updateAd, toggleAdDurationOption, publishCollage, draftCollage, updateDraftCollage, accounts, assignModerator, removeModerator, updateListing, addNotification, customerIssues, updateIssueStatus, addOrder } = useAppStore();
+  const { currentUser, listings, deleteListing, loginAccount, registerAccount, logoutAccount, rentACarApplications, approveRentACarApplication, rejectRentACarApplication, orders, updateOrderStatus, deleteOrderForUser, updateProfileAvatar, stories, addStory, isBiometricsEnabled, setBiometricsEnabled, addReview, reviews, createChat, setCartModalVisible, setCheckoutStep, adPricing, updateAdPricing, ads, deleteAd, createAd, updateAd, toggleAdDurationOption, publishCollage, draftCollage, updateDraftCollage, accounts, assignModerator, removeModerator, updateListing, addNotification, customerIssues, updateIssueStatus, addOrder } = useAppStore();
 
   const hasCMSPerm = currentUser?.role === 'super_admin' || currentUser?.moderatorPermissions?.isSuperAdmin || currentUser?.moderatorPermissions?.canManageCMS;
   const hasFirmsPerm = currentUser?.role === 'super_admin' || currentUser?.moderatorPermissions?.isSuperAdmin || currentUser?.moderatorPermissions?.canApproveFirms;
@@ -1203,10 +1203,11 @@ export default function ProfileScreen() {
   });
 
   // Bought orders by this user
-  const boughtOrders = orders.filter(o => o.buyerId === currentUser?.id);
+  const boughtOrders = orders.filter(o => o.buyerId === currentUser?.id && o.buyerDeleted !== true);
 
   // Sold orders (seller orders) belonging to this user's listings
   const sellerOrders = orders.filter(o => 
+    o.sellerDeleted !== true &&
     o.items.some(item => 
       item.listing.sellerName === currentUser?.name || 
       (currentUser?.shopName && item.listing.sellerName === currentUser.shopName)
@@ -3240,7 +3241,7 @@ export default function ProfileScreen() {
 
         <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
           {(() => {
-            const buyerOrders = orders.filter(o => o.buyerId === currentUser?.id);
+            const buyerOrders = boughtOrders;
             if (buyerOrders.length === 0) {
               return (
                 <View style={styles.emptyContainer}>
@@ -3327,27 +3328,64 @@ export default function ProfileScreen() {
                     )}
 
                     {order.status === 'completed' && (
-                      <Pressable
-                        style={{
-                          backgroundColor: 'rgba(9, 105, 218, 0.1)',
-                          borderColor: theme.gold,
-                          borderWidth: 1,
-                          paddingVertical: 8,
-                          borderRadius: 8,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          marginTop: 4,
-                          flexDirection: 'row',
-                          gap: 6
-                        }}
-                        onPress={() => handleOpenReviewModal(order)}
-                        disabled={reviewedOrders.includes(order.id)}
-                      >
-                        <Star size={13} color={theme.gold} fill={reviewedOrders.includes(order.id) ? theme.gold : 'transparent'} />
-                        <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold' }}>
-                          {reviewedOrders.includes(order.id) ? 'Değerlendirildi' : 'Satıcıyı Değerlendir'}
-                        </Text>
-                      </Pressable>
+                      <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                        <Pressable
+                          style={{
+                            flex: 1,
+                            backgroundColor: 'rgba(9, 105, 218, 0.1)',
+                            borderColor: theme.gold,
+                            borderWidth: 1,
+                            paddingVertical: 8,
+                            borderRadius: 8,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexDirection: 'row',
+                            gap: 6
+                          }}
+                          onPress={() => handleOpenReviewModal(order)}
+                          disabled={reviewedOrders.includes(order.id)}
+                        >
+                          <Star size={13} color={theme.gold} fill={reviewedOrders.includes(order.id) ? theme.gold : 'transparent'} />
+                          <Text style={{ color: theme.gold, fontSize: 11, fontWeight: 'bold' }}>
+                            {reviewedOrders.includes(order.id) ? 'Değerlendirildi' : 'Satıcıyı Değerlendir'}
+                          </Text>
+                        </Pressable>
+                        
+                        <Pressable
+                          style={{
+                            flex: 1,
+                            backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                            borderColor: '#EF4444',
+                            borderWidth: 1,
+                            paddingVertical: 8,
+                            borderRadius: 8,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexDirection: 'row',
+                            gap: 4
+                          }}
+                          onPress={() => {
+                            Alert.alert(
+                              'Siparişi Sil',
+                              'Bu siparişi listenizden silmek istediğinize emin misiniz? (Arşivde saklanacaktır)',
+                              [
+                                { text: 'Vazgeç', style: 'cancel' },
+                                {
+                                  text: 'Evet, Sil',
+                                  style: 'destructive',
+                                  onPress: () => {
+                                    deleteOrderForUser(order.id, 'buyer');
+                                    Alert.alert('Başarılı', 'Sipariş listenizden kaldırıldı.');
+                                  }
+                                }
+                              ]
+                            );
+                          }}
+                        >
+                          <Trash2 size={12} color="#EF4444" />
+                          <Text style={{ color: '#EF4444', fontSize: 11, fontWeight: 'bold' }}>Siparişi Sil</Text>
+                        </Pressable>
+                      </View>
                     )}
                   </View>
                 ))}
@@ -3376,12 +3414,7 @@ export default function ProfileScreen() {
 
         <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
           {(() => {
-            const sellerOrders = orders.filter(o => 
-              o.items.some(item => 
-                item.listing.sellerName === currentUser?.name || 
-                (currentUser?.shopName && item.listing.sellerName === currentUser.shopName)
-              )
-            );
+            const sellerOrdersList = sellerOrders;
             if (sellerOrders.length === 0) {
               return (
                 <View style={styles.emptyContainer}>
@@ -3391,7 +3424,7 @@ export default function ProfileScreen() {
             }
             return (
               <View style={{ gap: 12 }}>
-                {sellerOrders.map((order) => {
+                {sellerOrdersList.map((order) => {
                   const trackingValue = trackingInputs[order.id] || '';
                   return (
                     <View key={order.id} style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: itemBorder, backgroundColor: itemBg, gap: 8 }}>
@@ -3536,8 +3569,43 @@ export default function ProfileScreen() {
                       )}
 
                       {order.status === 'completed' && (
-                        <View style={{ padding: 6, borderRadius: 6, backgroundColor: 'rgba(16, 185, 129, 0.08)', borderWidth: 1, borderColor: '#10B981', alignItems: 'center' }}>
-                          <Text style={{ fontSize: 11, color: '#10B981', fontWeight: '700' }}>✓ İşlem Başarıyla Tamamlandı</Text>
+                        <View style={{ gap: 6, marginTop: 4 }}>
+                          <View style={{ padding: 6, borderRadius: 6, backgroundColor: 'rgba(16, 185, 129, 0.08)', borderWidth: 1, borderColor: '#10B981', alignItems: 'center' }}>
+                            <Text style={{ fontSize: 11, color: '#10B981', fontWeight: '700' }}>✓ İşlem Başarıyla Tamamlandı</Text>
+                          </View>
+                          <Pressable
+                            style={{
+                              height: 36,
+                              borderRadius: 6,
+                              backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                              borderColor: '#EF4444',
+                              borderWidth: 1,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexDirection: 'row',
+                              gap: 4
+                            }}
+                            onPress={() => {
+                              Alert.alert(
+                                'Siparişi Sil',
+                                'Bu siparişi gelen kutunuzdan silmek istediğinize emin misiniz? (Arşivde saklanacaktır)',
+                                [
+                                  { text: 'Vazgeç', style: 'cancel' },
+                                  {
+                                    text: 'Evet, Sil',
+                                    style: 'destructive',
+                                    onPress: () => {
+                                      deleteOrderForUser(order.id, 'seller');
+                                      Alert.alert('Başarılı', 'Sipariş listenizden kaldırıldı.');
+                                    }
+                                  }
+                                ]
+                              );
+                            }}
+                          >
+                            <Trash2 size={12} color="#EF4444" />
+                            <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: 'bold' }}>Siparişi Sil</Text>
+                          </Pressable>
                         </View>
                       )}
                     </View>

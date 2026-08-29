@@ -25,7 +25,7 @@ export default function OrdersScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = width > 768;
 
-  const { currentUser, orders, updateOrderStatus, addReview, reportIssue, listings, addOrder } = useAppStore();
+  const { currentUser, orders, updateOrderStatus, deleteOrderForUser, addReview, reportIssue, listings, addOrder } = useAppStore();
   const [activeTab, setActiveTab] = useState<'bought' | 'sold'>('bought');
   const [trackingCodes, setTrackingCodes] = useState<{ [key: string]: string }>({});
 
@@ -61,9 +61,9 @@ export default function OrdersScreen() {
   }
 
   // Filter orders
-  const boughtOrders = (orders || []).filter(o => o.buyerId === currentUser.id);
+  const boughtOrders = (orders || []).filter(o => o.buyerId === currentUser.id && o.buyerDeleted !== true);
   const soldOrders = (orders || []).filter(o => 
-    o.items.some(item => item.listing.sellerName === currentUser.name)
+    o.items.some(item => item.listing.sellerName === currentUser.name) && o.sellerDeleted !== true
   );
 
   const currentOrdersList = activeTab === 'bought' ? boughtOrders : soldOrders;
@@ -290,19 +290,67 @@ export default function OrdersScreen() {
                       <Text style={styles.actionBtnText}>Teslim Edildi Olarak İşaretle</Text>
                     </Pressable>
                   )}
+                  {order.status === 'completed' && (
+                    <Pressable 
+                      style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: '#EF4444' }]}
+                      onPress={() => {
+                        Alert.alert(
+                          'Siparişi Sil',
+                          'Bu siparişi gelen kutunuzdan silmek istediğinize emin misiniz? (Arşivde saklanacaktır)',
+                          [
+                            { text: 'Vazgeç', style: 'cancel' },
+                            {
+                              text: 'Evet, Sil',
+                              style: 'destructive',
+                              onPress: () => {
+                                deleteOrderForUser(order.id, 'seller');
+                                Alert.alert('Başarılı', 'Sipariş gelen kutunuzdan kaldırıldı.');
+                              }
+                            }
+                          ]
+                        );
+                      }}
+                    >
+                      <Text style={[styles.actionBtnText, { color: '#EF4444', fontWeight: 'bold' }]}>Siparişi Sil</Text>
+                    </Pressable>
+                  )}
                 </View>
               ) : (
                 /* Buyer Actions */
                 (order.status === 'completed' || order.status === 'shipped') && (
                   <View style={[styles.actionsRow, { gap: 10 }]}>
                     {order.status === 'completed' && (
-                      <Pressable 
-                        style={[styles.actionBtn, { backgroundColor: theme.gold }]}
-                        onPress={() => setReviewOrder(order.id)}
-                      >
-                        <Star size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
-                        <Text style={styles.actionBtnText}>Satıcıyı Değerlendir</Text>
-                      </Pressable>
+                      <>
+                        <Pressable 
+                          style={[styles.actionBtn, { backgroundColor: theme.gold }]}
+                          onPress={() => setReviewOrder(order.id)}
+                        >
+                          <Star size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+                          <Text style={styles.actionBtnText}>Satıcıyı Değerlendir</Text>
+                        </Pressable>
+                        <Pressable 
+                          style={[styles.actionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: '#EF4444' }]}
+                          onPress={() => {
+                            Alert.alert(
+                              'Siparişi Sil',
+                              'Bu siparişi listenizden silmek istediğinize emin misiniz? (Arşivde saklanacaktır)',
+                              [
+                                { text: 'Vazgeç', style: 'cancel' },
+                                {
+                                  text: 'Evet, Sil',
+                                  style: 'destructive',
+                                  onPress: () => {
+                                    deleteOrderForUser(order.id, 'buyer');
+                                    Alert.alert('Başarılı', 'Sipariş listenizden kaldırıldı.');
+                                  }
+                                }
+                              ]
+                            );
+                          }}
+                        >
+                          <Text style={[styles.actionBtnText, { color: '#EF4444', fontWeight: 'bold' }]}>Siparişi Sil</Text>
+                        </Pressable>
+                      </>
                     )}
                     
                     <Pressable 

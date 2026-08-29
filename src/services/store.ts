@@ -338,6 +338,7 @@ interface StoreState {
   orders: Order[];
   addOrder: (order: Omit<Order, 'id' | 'createdAt' | 'status'>) => string;
   updateOrderStatus: (orderId: string, status: Order['status'], trackingNumber?: string) => void;
+  deleteOrderForUser: (orderId: string, role: 'buyer' | 'seller') => void;
 
   // Customer Issues State & Actions
   customerIssues: CustomerIssue[];
@@ -1725,6 +1726,32 @@ export const useAppStore = create<StoreState>((set, get) => ({
         console.warn('Error loading accounts inside restoreSession:', accountsErr);
       }
 
+      // Load orders from LocalStorage
+      try {
+        const localOrdersStr = await AsyncStorage.getItem('mezatliyoruz_orders');
+        if (localOrdersStr) {
+          const parsed = JSON.parse(localOrdersStr);
+          if (parsed && Array.isArray(parsed)) {
+            set({ orders: parsed });
+          }
+        }
+      } catch (ordersErr) {
+        console.warn('Error loading orders inside restoreSession:', ordersErr);
+      }
+
+      // Load notifications from LocalStorage
+      try {
+        const localNotifsStr = await AsyncStorage.getItem('mezatliyoruz_notifications');
+        if (localNotifsStr) {
+          const parsed = JSON.parse(localNotifsStr);
+          if (parsed && Array.isArray(parsed)) {
+            set({ notifications: parsed });
+          }
+        }
+      } catch (notifsErr) {
+        console.warn('Error loading notifications inside restoreSession:', notifsErr);
+      }
+
       // Load customer issues from LocalStorage
       try {
         const localIssuesStr = await AsyncStorage.getItem('mezatliyoruz_customer_issues');
@@ -2995,10 +3022,14 @@ export const useAppStore = create<StoreState>((set, get) => ({
         if (item) saveListingToFirestore(item);
       });
 
+      const newOrders = [newOrder, ...s.orders];
+      const newNotifs = [sNotif, bNotif, ...extraNotifications, ...s.notifications];
+      AsyncStorage.setItem('mezatliyoruz_orders', JSON.stringify(newOrders)).catch(err => console.warn(err));
+      AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify(newNotifs)).catch(err => console.warn(err));
       return {
-        orders: [newOrder, ...s.orders],
+        orders: newOrders,
         chats: s.chats.map(c => c.id === chatId ? { ...c, messages: [...c.messages, newMsg] } : c),
-        notifications: [sNotif, bNotif, ...extraNotifications, ...s.notifications],
+        notifications: newNotifs,
         listings: updatedListings
       };
     });
@@ -3039,6 +3070,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
         isRead: false
       };
 
+      const newNotifs = [statusNotif, ...state.notifications];
+      AsyncStorage.setItem('mezatliyoruz_orders', JSON.stringify(updatedOrders)).catch(err => console.warn(err));
+      AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify(newNotifs)).catch(err => console.warn(err));
+
       if (chat) {
         const updateMsg: Message = {
           id: `msg_status_${Date.now()}`,
@@ -3051,16 +3086,32 @@ export const useAppStore = create<StoreState>((set, get) => ({
         return {
           orders: updatedOrders,
           chats: state.chats.map(c => c.id === chat.id ? { ...c, messages: [...c.messages, updateMsg] } : c),
-          notifications: [statusNotif, ...state.notifications]
+          notifications: newNotifs
         };
       } else {
         return {
           orders: updatedOrders,
-          notifications: [statusNotif, ...state.notifications]
+          notifications: newNotifs
         };
       }
     }
 
+    AsyncStorage.setItem('mezatliyoruz_orders', JSON.stringify(updatedOrders)).catch(err => console.warn(err));
+    return { orders: updatedOrders };
+  }),
+
+  deleteOrderForUser: (orderId, role) => set((state) => {
+    const updatedOrders = state.orders.map((o) => {
+      if (o.id === orderId) {
+        if (role === 'buyer') {
+          return { ...o, buyerDeleted: true };
+        } else if (role === 'seller') {
+          return { ...o, sellerDeleted: true };
+        }
+      }
+      return o;
+    });
+    AsyncStorage.setItem('mezatliyoruz_orders', JSON.stringify(updatedOrders)).catch(err => console.warn(err));
     return { orders: updatedOrders };
   }),
 
@@ -3116,15 +3167,16 @@ export const useAppStore = create<StoreState>((set, get) => ({
         isRead: false
       };
 
+      const updatedNotifications = [buyerNotif, ...state.notifications];
+      AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify(updatedNotifications)).catch(err => console.warn(err));
       return {
         customerIssues: updatedIssues,
-        notifications: [buyerNotif, ...state.notifications]
+        notifications: updatedNotifications
       };
     }
 
     return { customerIssues: updatedIssues };
   }),
-
   addListing: (newListing) => set((state) => {
     const listingNumber = String(Math.floor(100000 + Math.random() * 900000));
     const listingWithId: Listing = {
@@ -3220,18 +3272,25 @@ export const useAppStore = create<StoreState>((set, get) => ({
       }).catch(err => console.warn('Error scheduling global notification:', err));
     }
 
+    const updated = [newNotif, ...state.notifications];
+    AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify(updated)).catch(err => console.warn(err));
     return {
-      notifications: [newNotif, ...state.notifications]
+      notifications: updated
     };
   }),
 
-  markNotificationAsRead: (notificationId) => set((state) => ({
-    notifications: state.notifications.map((n) =>
+  markNotificationAsRead: (notificationId) => set((state) => {
+    const updated = state.notifications.map((n) =>
       n.id === notificationId ? { ...n, isRead: true } : n
-    )
-  })),
+    );
+    AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify(updated)).catch(err => console.warn(err));
+    return { notifications: updated };
+  }),
 
-  clearNotifications: () => set({ notifications: [] }),
+  clearNotifications: () => {
+    AsyncStorage.setItem('mezatliyoruz_notifications', JSON.stringify([])).catch(err => console.warn(err));
+    set({ notifications: [] });
+  },
 
   serverCalculateCartTotal: (cartItems) => {
     const dbListings = get().listings;

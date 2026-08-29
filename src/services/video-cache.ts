@@ -42,7 +42,22 @@ export class VideoCacheManager {
   }
 
   static async prefetchVideos(urls: string[]): Promise<void> {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      if (typeof document !== 'undefined') {
+        urls.forEach((url) => {
+          if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
+          const existing = document.querySelector(`link[href="${url}"]`);
+          if (!existing) {
+            const link = document.createElement('link');
+            link.rel = 'preload';
+            link.as = 'video';
+            link.href = url;
+            document.head.appendChild(link);
+          }
+        });
+      }
+      return;
+    }
 
     // Run prefetch in background asynchronously
     urls.forEach(async (url) => {
