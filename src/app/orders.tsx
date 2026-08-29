@@ -16,6 +16,7 @@ import { useAppStore } from '@/services/store';
 import { Colors } from '@/constants/theme';
 import { ArrowLeft, ShoppingBag, Truck, CheckCircle2, ShieldAlert, Star, MessageSquare } from 'lucide-react-native';
 import GlobalHeader from '@/components/global-header';
+import CargoTrackingModal from '@/components/cargo-tracking-modal';
 
 export default function OrdersScreen() {
   const router = useRouter();
@@ -27,6 +28,11 @@ export default function OrdersScreen() {
   const { currentUser, orders, updateOrderStatus, addReview, reportIssue } = useAppStore();
   const [activeTab, setActiveTab] = useState<'bought' | 'sold'>('bought');
   const [trackingCodes, setTrackingCodes] = useState<{ [key: string]: string }>({});
+
+  // Cargo tracking states
+  const [trackingModalVisible, setTrackingModalVisible] = useState(false);
+  const [selectedTrackingNum, setSelectedTrackingNum] = useState('');
+  const [selectedTrackingCarrier, setSelectedTrackingCarrier] = useState('');
 
   // Review states
   const [reviewOrder, setReviewOrder] = useState<string | null>(null);
@@ -199,9 +205,30 @@ export default function OrdersScreen() {
                     Kargo Tipi: <Text style={{ color: theme.text, fontWeight: '600' }}>Alıcı Ödemeli</Text> | Ücret: <Text style={{ color: theme.text, fontWeight: '600' }}>{order.shippingFee} TL</Text>
                   </Text>
                   {order.trackingNumber && (
-                    <Text style={{ color: theme.textSecondary, fontSize: 11 }}>
-                      Takip Numarası: <Text style={{ color: theme.text, fontWeight: 'bold' }}>{order.trackingNumber}</Text>
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+                      <Text style={{ color: theme.textSecondary, fontSize: 11 }}>
+                        Takip Numarası: <Text style={{ color: theme.text, fontWeight: 'bold' }}>{order.trackingNumber}</Text>
+                      </Text>
+                      <Pressable
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          backgroundColor: theme.gold,
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 4,
+                          gap: 2,
+                        }}
+                        onPress={() => {
+                          setSelectedTrackingNum(order.trackingNumber || '');
+                          setSelectedTrackingCarrier(order.shippingCompany || 'Kargo Firması');
+                          setTrackingModalVisible(true);
+                        }}
+                      >
+                        <Truck size={10} color="#000000" />
+                        <Text style={{ color: '#000000', fontSize: 10, fontWeight: 'bold' }}>Takip Et</Text>
+                      </Pressable>
+                    </View>
                   )}
                   {order.cargoBarcodeUrl && (
                     <Pressable 
@@ -413,6 +440,12 @@ export default function OrdersScreen() {
           ))
         )}
       </ScrollView>
+      <CargoTrackingModal
+        visible={trackingModalVisible}
+        onClose={() => setTrackingModalVisible(false)}
+        trackingNumber={selectedTrackingNum}
+        carrierName={selectedTrackingCarrier}
+      />
     </View>
   );
 }

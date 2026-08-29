@@ -19,7 +19,7 @@ import { useAppStore, Listing, UserProfile, AdPricing, Ad, ModeratorPermissions,
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { User, ShieldCheck, Heart, Clock, ChevronRight, Tag, Plus, LogOut, Car, ShieldAlert, Home, Key, Store, Briefcase, Camera, X, Fingerprint, Star, FileText, ShoppingCart, MessageSquare, Gavel, Megaphone, Pencil, Trash2, Pause, Play, Copy } from 'lucide-react-native';
+import { User, ShieldCheck, Heart, Clock, ChevronRight, Tag, Plus, LogOut, Car, ShieldAlert, Home, Key, Store, Briefcase, Camera, X, Fingerprint, Star, FileText, ShoppingCart, MessageSquare, Gavel, Megaphone, Pencil, Trash2, Pause, Play, Copy, Truck } from 'lucide-react-native';
 import { useRouter, useNavigation, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Video } from 'react-native-compressor';
@@ -29,6 +29,7 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { formatTime } from '@/utils/time';
 import Svg, { Path, Circle, Rect, Text as SvgText, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { ABOUT_US_TEXT, DELIVERY_RETURN_TEXT, PRIVACY_POLICY_TEXT, DISTANCE_SELLING_TEXT } from '@/constants/legal';
+import CargoTrackingModal from '@/components/cargo-tracking-modal';
 
 const getUserBadges = (user: any) => {
   const state = useAppStore.getState();
@@ -148,6 +149,11 @@ export default function ProfileScreen() {
   const [isAdUploading, setIsAdUploading] = useState(false);
   const [adUploadProgress, setAdUploadProgress] = useState(0);
   const [newAdRemoteVideoUrl, setNewAdRemoteVideoUrl] = useState<string | null>(null);
+
+  // Cargo tracking states
+  const [trackingModalVisible, setTrackingModalVisible] = useState(false);
+  const [selectedTrackingNum, setSelectedTrackingNum] = useState('');
+  const [selectedTrackingCarrier, setSelectedTrackingCarrier] = useState('');
   const [adminPricing, setAdminPricing] = useState<AdPricing>(adPricing);
   const [adDestinationType, setAdDestinationType] = useState<'listing' | 'profile'>('listing');
   const [customAdTitle, setCustomAdTitle] = useState('');
@@ -3280,10 +3286,43 @@ export default function ProfileScreen() {
                     </View>
 
                     {order.trackingNumber && (
-                      <View style={{ padding: 8, borderRadius: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#F1F5F9', borderLeftWidth: 3, borderLeftColor: '#8B5CF6' }}>
-                        <Text style={{ fontSize: 11, color: theme.text, fontWeight: '600' }}>
-                          📦 Kargo Takip No: {order.trackingNumber}
-                        </Text>
+                      <View style={{ 
+                        padding: 10, 
+                        borderRadius: 8, 
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#F1F5F9', 
+                        borderLeftWidth: 3, 
+                        borderLeftColor: '#8B5CF6',
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginTop: 4
+                      }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 11, color: theme.textSecondary }}>Kargo Takip No:</Text>
+                          <Text style={{ fontSize: 12, color: theme.text, fontWeight: 'bold', marginTop: 2 }}>
+                            {order.trackingNumber}
+                          </Text>
+                        </View>
+                        <Pressable
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: theme.gold,
+                            paddingHorizontal: 12,
+                            paddingVertical: 6,
+                            borderRadius: 6,
+                            gap: 4,
+                          }}
+                          onPress={() => {
+                            setSelectedTrackingNum(order.trackingNumber);
+                            setSelectedTrackingCarrier(order.shippingCompany || 'Kargo Firması');
+                            setTrackingModalVisible(true);
+                          }}
+                        >
+                          <Truck size={12} color="#000000" />
+                          <Text style={{ color: '#000000', fontSize: 11, fontWeight: 'bold' }}>Kargom Nerede?</Text>
+                        </Pressable>
                       </View>
                     )}
 
@@ -4470,6 +4509,13 @@ export default function ProfileScreen() {
           )}
         </View>
       </Modal>
+
+      <CargoTrackingModal
+        visible={trackingModalVisible}
+        onClose={() => setTrackingModalVisible(false)}
+        trackingNumber={selectedTrackingNum}
+        carrierName={selectedTrackingCarrier}
+      />
 
       {/* Listing Photo Selector Modal for Story */}
       <Modal
