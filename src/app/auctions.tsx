@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAppStore, Listing } from '@/services/store';
+import { useAppStore, Listing, getListingSeoUrl } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -35,6 +35,7 @@ import {
   ShoppingCart,
   Star,
   ChevronRight,
+  ChevronLeft,
   Play,
   MapPin,
   X,
@@ -42,13 +43,26 @@ import {
   ChevronDown,
   Check,
   GitCompare,
+  Megaphone,
 } from 'lucide-react-native';
 import { formatTime } from '@/utils/time';
-import { FLEA_MARKET_CATEGORIES, PRODUCER_CATEGORIES, RENTAL_SUB_CATEGORIES } from './create';
+import { FLEA_MARKET_CATEGORIES, PRODUCER_CATEGORIES, RENTAL_SUB_CATEGORIES } from '@/constants/categories';
 import CategoryBadge from '@/components/category-badge';
+import WebFooter from '@/components/web-footer';
 
 const USER_LATITUDE = 41.0082;
 const USER_LONGITUDE = 28.9784;
+
+const DESKTOP_MAIN_HEADINGS = [
+  { id: 'all', label: 'Tümü', type: 'reset' },
+  { id: 'auction', label: 'Mezat', type: 'filter', filterVal: 'auction' },
+  { id: 'offer', label: 'Teklifliler', type: 'filter', filterVal: 'offer' },
+  { id: 'fixed', label: 'Sabit Fiyat', type: 'filter', filterVal: 'fixed' },
+  { id: 'rent', label: 'Kiralık', type: 'filter', filterVal: 'rent' },
+  { id: 'flea', label: 'Bit Pazarı', type: 'category', categoryVal: 'Bit Pazarı' },
+  { id: 'producer', label: 'Üreticiden Tüketiciye', type: 'category', categoryVal: 'Üreticiden Tüketiciye' },
+  { id: 'satkirala', label: 'Sat / Kirala', type: 'category', categoryVal: 'Sat / Kirala' },
+];
 
 const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371; 
@@ -119,7 +133,49 @@ const isSatKiralaCategory = (item: Listing) => {
 
 export default function AuctionsScreen() {
   const router = useRouter();
-  const { type, category } = useLocalSearchParams<{ type?: string; category?: string }>();
+  const { type: typeParam, category: categoryParam } = useLocalSearchParams<{ type?: string; category?: string }>();
+  const [category, setCategory] = useState<string | null>(categoryParam || null);
+  const type = typeParam || null;
+  const [expandedCats, setExpandedCats] = useState<{ [key: string]: boolean }>({
+    'Bit Pazarı': true,
+    'Üreticiden Tüketiciye': false,
+    'Sat / Kirala': false,
+  });
+
+  const scrollRef = useRef<any>(null);
+  const [showLeftArrow, setShowLeftArrow] = useState(false);
+  const [showRightArrow, setShowRightArrow] = useState(true);
+
+  const scrollLeft = () => {
+    if (scrollRef.current) {
+      if (Platform.OS === 'web') {
+        const node = scrollRef.current.getScrollableNode();
+        if (node) {
+          node.scrollBy({ left: -200, behavior: 'smooth' });
+        }
+      }
+    }
+  };
+
+  const scrollRight = () => {
+    if (scrollRef.current) {
+      if (Platform.OS === 'web') {
+        const node = scrollRef.current.getScrollableNode();
+        if (node) {
+          node.scrollBy({ left: 200, behavior: 'smooth' });
+        }
+      }
+    }
+  };
+
+  const handleScroll = (event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const isAtStart = contentOffset.x <= 5;
+    const isAtEnd = contentOffset.x + layoutMeasurement.width >= contentSize.width - 5;
+    setShowLeftArrow(!isAtStart);
+    setShowRightArrow(!isAtEnd);
+  };
+
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isDesktop = windowWidth > 768;
   const pathname = usePathname();
@@ -132,7 +188,7 @@ export default function AuctionsScreen() {
   // Display height calculation for each Reel slide
   const displayHeight = windowHeight - 64 - 60 - insets.top;
 
-  const { listings, decrementTimers, toggleLike, addToCart, setCartModalVisible, setCheckoutStep, compareList, removeFromCompareList, clearCompareList } = useAppStore();
+  const { listings, decrementTimers, toggleLike, addToCart, setCartModalVisible, setCheckoutStep, compareList, removeFromCompareList, clearCompareList, ads } = useAppStore();
   const [compareModalVisible, setCompareModalVisible] = useState(false);
 
 
@@ -239,26 +295,51 @@ export default function AuctionsScreen() {
 
   // Sync route params with internal state
   useEffect(() => {
-    if (type) {
-      setSelectedFilter(type as FilterType);
+    if (typeParam) {
+      setSelectedFilter(typeParam as FilterType);
     } else {
       setSelectedFilter('all');
     }
     setViewMode('grid');
-  }, [type]);
+  }, [typeParam]);
 
   useEffect(() => {
-    if (category) {
-      setSelectedCategory(category);
+    if (categoryParam) {
+      setCategory(categoryParam);
+      setSelectedCategory(null);
     } else {
+      setCategory(null);
       setSelectedCategory(null);
     }
     setViewMode('grid');
+  }, [categoryParam]);
+
+  // Sync tree expansion when category changes
+  useEffect(() => {
+    if (category === 'Bit Pazarı') {
+      setExpandedCats(prev => ({ ...prev, 'Bit Pazarı': true }));
+    } else if (category === 'Üreticiden Tüketiciye') {
+      setExpandedCats(prev => ({ ...prev, 'Üreticiden Tüketiciye': true }));
+    } else if (category === 'Sat / Kirala') {
+      setExpandedCats(prev => ({ ...prev, 'Sat / Kirala': true }));
+    }
   }, [category]);
 
   // Filter and Sort Products
   const filteredReels = listings
     .filter((item) => {
+      // Exclude pending/rejected/suspended listings
+      if (item.status === 'pending_approval' || item.status === 'rejected' || item.status === 'suspended') {
+        return false;
+      }
+      // Exclude expired auctions
+      if (item.type === 'auction' && (item.timeLeft === 0 || item.auctionStatus === 'expired' || item.auctionStatus === 'won' || item.auctionStatus === 'purchased')) {
+        return false;
+      }
+      // Exclude vehicles/real estate from live auctions
+      if (item.type === 'auction' && (item.isVehicle || item.isRealEstate)) {
+        return false;
+      }
       // If we are in category mode (i.e. category or type exists), show all matching items, not just video ones!
       // Otherwise (General Reels Feed), only show items that have a videoUrl.
       if (!category && !type && !item.videoUrl) return false;
@@ -420,6 +501,59 @@ export default function AuctionsScreen() {
     }
   }
 
+  const defaultCompanyAds = [
+    {
+      id: 'default_company_ad_1',
+      isAd: true,
+      title: 'Mezatliyoruz Premium Üyelik Fırsatları!',
+      description: 'Hemen premium üye olun, ilanlarınızı öne çıkarın!',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-gold-pocket-watch-40915-large.mp4',
+      photos: ['https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800'],
+      userName: 'Mezatliyoruz Destek',
+      targetUrl: '/profile',
+    },
+    {
+      id: 'default_company_ad_2',
+      isAd: true,
+      title: 'Antika ve Retro Eşyalarda Dev Müzayede!',
+      description: 'Canlı mezatları takip edin, en özel parçaları kaçırmayın.',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-old-vintage-book-opening-40916-large.mp4',
+      photos: ['https://images.unsplash.com/photo-1512820790803-83ca734da794?w=800'],
+      userName: 'Mezatliyoruz Canlı',
+      targetUrl: '/auctions',
+    }
+  ];
+
+  const mixedReelsItems = useMemo(() => {
+    const activeAds = ads.filter(ad => ad.status === 'active' && ad.videoUrl);
+    const adsPool = activeAds.length > 0 ? activeAds : defaultCompanyAds;
+    
+    const mixedList: any[] = [];
+    let adIdx = 0;
+    
+    smartReelsItems.forEach((item, index) => {
+      mixedList.push(item);
+      // Every 5 items, inject 1 ad
+      if ((index + 1) % 5 === 0) {
+        const targetAd = adsPool[adIdx % adsPool.length];
+        const associatedListing = listings.find(l => l.id === targetAd.listingId);
+        mixedList.push({
+          ...targetAd,
+          isAd: true,
+          id: `ad_item_${targetAd.id}_${index}`,
+          photos: targetAd.photos || [associatedListing?.photos[0] || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500'],
+          title: targetAd.title || associatedListing?.title || 'Sponsorlu Reklam',
+          price: associatedListing?.price || 0,
+          type: 'ad',
+          sellerName: targetAd.userName || associatedListing?.sellerName || 'Sponsorlu',
+          listingId: targetAd.listingId || null,
+        });
+        adIdx++;
+      }
+    });
+    return mixedList;
+  }, [smartReelsItems, ads, listings]);
+
   // Staggered heights for masonry grid cards
   const getCardHeight = (idx: number) => {
     const heights = [160, 230, 190, 210, 150];
@@ -512,6 +646,131 @@ export default function AuctionsScreen() {
 
   const renderFeedItem = ({ item, index }: { item: Listing; index: number }) => {
     const isActive = index === activeItemIndex;
+
+    // Check if it's an Ad and render the custom Ad Layout
+    if ((item as any).isAd) {
+      const adItem = item as any;
+      const isPreload = index === activeItemIndex + 1 || index === activeItemIndex - 1;
+      const shouldRenderVideo = isActive || isPreload;
+      
+      return (
+        <View style={[styles.cardContainer, { height: displayHeight, width: windowWidth, backgroundColor: '#000000' }]}>
+          {shouldRenderVideo ? (
+            <VideoPlayer url={adItem.videoUrl} isActive={isActive && isFocused} posterUrl={adItem.photos[0]} />
+          ) : (
+            <Image
+              source={typeof adItem.photos[0] === 'number' ? adItem.photos[0] : { uri: adItem.photos[0] }}
+              style={{ width: windowWidth, height: displayHeight, resizeMode: 'cover' }}
+            />
+          )}
+
+          {/* Ad Label Tag */}
+          <View style={{
+            position: 'absolute',
+            top: Math.max(16, insets.top + 16),
+            left: 16,
+            backgroundColor: 'rgba(245, 158, 11, 0.9)',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 6,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 10
+          }}>
+            <Megaphone size={12} color="#000000" />
+            <Text style={{ color: '#000000', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 }}>SPONSORLU REKLAM</Text>
+          </View>
+
+          {/* Right overlay buttons - Ad version */}
+          <View style={styles.rightOverlay}>
+            <Pressable
+              style={styles.iconButton}
+              onPress={() => {
+                if (adItem.listingId) {
+                  const adListing = listings.find(l => l.id === adItem.listingId);
+                  if (adListing) {
+                    router.push(getListingSeoUrl(adListing));
+                  } else {
+                    router.push(`/product/${adItem.listingId}`);
+                  }
+                } else if (adItem.targetUrl) {
+                  router.push(adItem.targetUrl);
+                }
+              }}
+            >
+              <ChevronRight size={28} color="#FFFFFF" />
+              <ThemedText style={[styles.iconLabel, { fontSize: 10, fontWeight: 'bold' }]}>İncele</ThemedText>
+            </Pressable>
+            
+            <Pressable
+              style={styles.iconButton}
+              onPress={async () => {
+                try {
+                  await Share.share({
+                    message: `Mezatliyoruz'da sponsorlu bir ilan buldum! ${adItem.title}. Hemen incele!`,
+                  });
+                } catch (e) {
+                  console.warn(e);
+                }
+              }}
+            >
+              <Send size={26} color="#FFFFFF" />
+            </Pressable>
+          </View>
+
+          {/* Bottom details overlay - Ad version */}
+          <View style={[styles.bottomOverlay, { paddingBottom: Math.max(28, insets.bottom + 16) }]}>
+            <View style={styles.sellerRow}>
+              <Image source={{ uri: adItem.sellerAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150' }} style={styles.sellerAvatar} />
+              <View>
+                <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' }}>{adItem.sellerName}</Text>
+                <Text style={{ color: '#94A3B8', fontSize: 10 }}>Sponsorlu Üye</Text>
+              </View>
+            </View>
+
+            <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: 'bold', marginVertical: 6 }}>{adItem.title}</Text>
+            <Text style={{ color: '#E2E8F0', fontSize: 12, lineHeight: 17 }} numberOfLines={2}>
+              {adItem.description || 'Detayları görmek için hemen aşağıdaki butona tıklayın!'}
+            </Text>
+
+            <View style={styles.priceAndCtaRow}>
+              {adItem.price > 0 ? (
+                <View>
+                  <Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 2 }}>Ürün Fiyatı</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '900' }}>{adItem.price.toLocaleString('tr-TR')} TL</Text>
+                </View>
+              ) : (
+                <View>
+                  <Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 2 }}>Partner</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '900' }}>Mezatliyoruz</Text>
+                </View>
+              )}
+
+              <Pressable
+                style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                onPress={() => {
+                  if (adItem.listingId) {
+                    const adListing = listings.find(l => l.id === adItem.listingId);
+                    if (adListing) {
+                      router.push(getListingSeoUrl(adListing));
+                    } else {
+                      router.push(`/product/${adItem.listingId}`);
+                    }
+                  } else if (adItem.targetUrl) {
+                    router.push(adItem.targetUrl);
+                  }
+                }}
+              >
+                <Text style={[styles.ctaButtonText, { color: '#000000', fontWeight: 'bold' }]}>Detayları Gör</Text>
+                <ChevronRight size={16} color="#000000" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      );
+    }
+
     const mediaItems = [
       { type: 'video', url: item.videoUrl },
       ...item.photos.map((p: any) => ({ type: 'image', url: p })),
@@ -564,7 +823,7 @@ export default function AuctionsScreen() {
         {/* Real-time Auction Time Left Overlay */}
         {item.type === 'auction' && item.timeLeft !== undefined && (
           <View style={styles.timerBadge}>
-            <Clock size={14} color="#FF6B00" />
+            <Clock size={14} color="#0969da" />
             <ThemedText style={styles.timerText}>
               {item.timeLeft > 0 ? formatTime(item.timeLeft) : 'Süre Doldu'}
             </ThemedText>
@@ -596,7 +855,7 @@ export default function AuctionsScreen() {
               setCartModalVisible(true);
             }}
           >
-            <ShoppingCart size={26} color="#FF6B00" />
+            <ShoppingCart size={26} color="#0969da" />
           </Pressable>
 
           <Pressable 
@@ -606,8 +865,8 @@ export default function AuctionsScreen() {
               alert(`${item.title} için değerlendirme puanı: ${ratingVal} / 5.0`);
             }}
           >
-            <Star size={26} color="#FF6B00" fill="#FF6B00" />
-            <ThemedText type="code" style={[styles.iconLabel, { color: '#FF6B00', fontWeight: 'bold' }]}>
+            <Star size={26} color="#0969da" fill="#0969da" />
+            <ThemedText type="code" style={[styles.iconLabel, { color: '#0969da', fontWeight: 'bold' }]}>
               {item.rating || 4.8}
             </ThemedText>
           </Pressable>
@@ -677,38 +936,120 @@ export default function AuctionsScreen() {
               </ThemedText>
             </View>
 
-            {item.type === 'fixed' ? (
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+            {(() => {
+              const isVehicleOrRealEstate = item.isVehicle || item.isRealEstate || 
+                item.category === '🏠 Emlak' || item.category === '🚗 Otomobil' || 
+                item.category === 'Sat / Kirala' || 
+                (item.category && (
+                  item.category.toLowerCase().includes('emlak') || 
+                  item.category.toLowerCase().includes('otomobil') || 
+                  item.category.toLowerCase().includes('araba') ||
+                  item.category.toLowerCase().includes('araç') ||
+                  item.category.toLowerCase().includes('vasıta')
+                )) ||
+                (item.subCategory && (
+                  item.subCategory.toLowerCase().includes('emlak') || 
+                  item.subCategory.toLowerCase().includes('otomobil') || 
+                  item.subCategory.toLowerCase().includes('araba') ||
+                  item.subCategory.toLowerCase().includes('araç') ||
+                  item.subCategory.toLowerCase().includes('vasıta')
+                ));
+
+              const showCartActions = item.type === 'fixed' && !isVehicleOrRealEstate;
+
+              if (showCartActions) {
+                return (
+                  <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        borderColor: '#0969da',
+                        paddingVertical: 7,
+                        paddingHorizontal: 10,
+                        borderRadius: 6,
+                        gap: 4,
+                      }}
+                      onPress={() => {
+                        addToCart(item.id);
+                        if (Platform.OS === 'web') {
+                          alert('Ürün başarıyla sepete eklendi.');
+                        } else {
+                          Alert.alert('Başarılı', 'Ürün başarıyla sepete eklendi.');
+                        }
+                      }}
+                    >
+                      <ShoppingCart size={13} color="#0969da" />
+                      <Text style={{ color: '#0969da', fontSize: 11, fontWeight: 'bold' }}>Sepet</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: '#0969da',
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        borderRadius: 6,
+                        gap: 4,
+                      }}
+                      onPress={() => {
+                        addToCart(item.id);
+                        setTimeout(() => {
+                          setCheckoutStep('shipping');
+                          setCartModalVisible(true);
+                        }, 150);
+                      }}
+                    >
+                      <ShieldCheck size={13} color="#FFFFFF" />
+                      <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' }}>Hemen Al</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                        paddingVertical: 8,
+                        paddingHorizontal: 8,
+                        borderRadius: 6,
+                      }}
+                      onPress={() => {
+                        router.push(getListingSeoUrl(item));
+                      }}
+                    >
+                      <Text style={{ color: '#F8FAFC', fontSize: 11, fontWeight: '700' }}>Detay</Text>
+                    </Pressable>
+                  </View>
+                );
+              }
+
+              return (item.type === 'fixed' || item.type === 'rent') ? (
                 <Pressable
-                  style={[styles.reelsAddToCartBtn, { backgroundColor: '#FF5500' }]}
-                  onPress={() => handleAddToCart(item)}
-                >
-                  <Text style={styles.reelsAddToCartBtnText}>Sepete Ekle</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                  style={styles.ctaButton}
                   onPress={() => {
-                    addToCart(item.id);
-                    setCheckoutStep('cart');
-                    setCartModalVisible(true);
+                    router.push(getListingSeoUrl(item));
                   }}
                 >
-                  <Text style={styles.ctaButtonText}>Hemen Al</Text>
+                  <ThemedText style={styles.ctaButtonText}>Detayları Gör</ThemedText>
+                  <ChevronRight size={16} color="#FFFFFF" />
                 </Pressable>
-              </View>
-            ) : (
-              <Pressable
-                style={styles.ctaButton}
-                onPress={() => {
-                  router.push(`/product/${item.id}`);
-                }}
-              >
-                <ThemedText style={styles.ctaButtonText}>
-                  {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
-                </ThemedText>
-                <ChevronRight size={16} color="#0B132B" />
-              </Pressable>
-            )}
+              ) : (
+                <Pressable
+                  style={styles.ctaButton}
+                  onPress={() => {
+                    router.push(getListingSeoUrl(item));
+                  }}
+                >
+                  <ThemedText style={styles.ctaButtonText}>
+                    {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
+                  </ThemedText>
+                  <ChevronRight size={16} color="#FFFFFF" />
+                </Pressable>
+              );
+            })()}
           </View>
         </View>
       </View>
@@ -745,7 +1086,7 @@ export default function AuctionsScreen() {
             {
               backgroundColor:
                 item.type === 'auction'
-                  ? 'rgba(255, 107, 0, 0.85)'
+                  ? 'rgba(9, 105, 218, 0.85)'
                   : item.type === 'offer'
                   ? 'rgba(147, 51, 234, 0.85)'
                   : item.type === 'rent'
@@ -772,6 +1113,60 @@ export default function AuctionsScreen() {
     );
   };
 
+  const renderDesktopReelsCard = (item: Listing, globalIndex: number) => {
+    return (
+      <Pressable
+        key={`desktop_reel_${item.id}`}
+        style={({ pressed }) => [
+          styles.desktopReelCard,
+          pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }
+        ]}
+        onPress={() => {
+          setActiveItemIndex(globalIndex);
+          setViewMode('reels');
+        }}
+      >
+        <Image
+          source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+          style={styles.desktopReelCardImage}
+        />
+
+        <View style={styles.desktopReelsBadge}>
+          <Play size={12} color="#FFFFFF" fill="#FFFFFF" />
+        </View>
+
+        <View
+          style={[
+            styles.desktopReelTypeBadge,
+            {
+              backgroundColor:
+                item.type === 'auction'
+                  ? 'rgba(9, 105, 218, 0.9)'
+                  : item.type === 'offer'
+                  ? 'rgba(147, 51, 234, 0.9)'
+                  : item.type === 'rent'
+                  ? 'rgba(139, 92, 246, 0.9)'
+                  : 'rgba(37, 99, 235, 0.9)',
+            },
+          ]}
+        >
+          <Text style={styles.desktopReelTypeBadgeText}>
+            {item.type === 'auction' ? 'MEZAT' : item.type === 'offer' ? 'TEKLİF' : item.type === 'rent' ? 'KİRALIK' : 'SABİT'}
+          </Text>
+        </View>
+
+        <View style={styles.desktopReelCardFooter}>
+          <Text style={styles.desktopReelCardTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          <Text style={styles.desktopReelCardPrice}>
+            {item.price.toLocaleString('tr-TR')} TL
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
   const renderListItem = (item: Listing) => {
     const isDark = scheme === 'dark';
     return (
@@ -785,7 +1180,7 @@ export default function AuctionsScreen() {
           }
         ]}
         onPress={() => {
-          router.push(`/product/${item.id}`);
+          router.push(getListingSeoUrl(item));
         }}
       >
         <Image
@@ -825,14 +1220,14 @@ export default function AuctionsScreen() {
               styles.typeBadge,
               {
                 backgroundColor: item.type === 'auction'
-                  ? 'rgba(255, 107, 0, 0.12)'
+                  ? 'rgba(9, 105, 218, 0.12)'
                   : item.type === 'offer'
                   ? 'rgba(147, 51, 234, 0.12)'
                   : item.type === 'rent'
                   ? 'rgba(139, 92, 246, 0.12)'
                   : 'rgba(59, 130, 246, 0.12)',
                 borderColor: item.type === 'auction'
-                  ? 'rgba(255, 107, 0, 0.25)'
+                  ? 'rgba(9, 105, 218, 0.25)'
                   : item.type === 'offer'
                   ? 'rgba(147, 51, 234, 0.25)'
                   : item.type === 'rent'
@@ -865,9 +1260,9 @@ export default function AuctionsScreen() {
   if (viewMode === 'reels') {
     return (
       <ThemedView style={[styles.container, { backgroundColor: '#000000', paddingTop: 0 }]}>
-        {smartReelsItems.length === 0 ? (
+        {mixedReelsItems.length === 0 ? (
           <View style={styles.reelsEmptyContainer}>
-            <SlidersHorizontal size={48} color="#FF6B00" style={{ marginBottom: 16 }} />
+            <SlidersHorizontal size={48} color="#0969da" style={{ marginBottom: 16 }} />
             <Text style={styles.reelsEmptyText}>Uyumlu Reels bulunamadı.</Text>
             <Pressable style={styles.reelsResetButton} onPress={handleResetFilters}>
               <Text style={styles.reelsResetButtonText}>Filtreleri Sıfırla</Text>
@@ -877,14 +1272,14 @@ export default function AuctionsScreen() {
           <View style={{ height: displayHeight, width: windowWidth }}>
             <FlatList
               ref={reelsFlatListRef}
-              data={smartReelsItems}
+              data={mixedReelsItems}
               renderItem={renderFeedItem}
               keyExtractor={(item) => `reel_feed_${item.id}`}
               pagingEnabled
               showsVerticalScrollIndicator={false}
               onViewableItemsChanged={onViewableItemsChanged}
               viewabilityConfig={viewabilityConfig}
-              initialScrollIndex={activeItemIndex < smartReelsItems.length ? activeItemIndex : 0}
+              initialScrollIndex={activeItemIndex < mixedReelsItems.length ? activeItemIndex : 0}
               getItemLayout={(data, index) => ({
                 length: displayHeight,
                 offset: displayHeight * index,
@@ -940,9 +1335,313 @@ export default function AuctionsScreen() {
     );
   }
 
+  const cleanCategoryName = (name: string) => {
+    return name.replace(/^[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDC00-\uDFFF]/g, '').trim();
+  };
+
+  const renderDesktopCategoryTree = () => {
+    const renderTreeItem = (
+      label: string, 
+      isSelected: boolean, 
+      onPress: () => void, 
+      depth: number = 0
+    ) => {
+      return (
+        <Pressable
+          onPress={onPress}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 8,
+            paddingLeft: depth * 16,
+            backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.08)' : 'transparent',
+            borderRadius: 6,
+            marginBottom: 2,
+            cursor: 'pointer',
+          }}
+        >
+          {depth > 0 && (
+            <View style={{
+              width: 4,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: isSelected ? '#0969da' : theme.textSecondary,
+              marginRight: 8,
+            }} />
+          )}
+          <Text
+            style={{
+              fontSize: depth === 0 ? 14 : 13,
+              fontWeight: isSelected ? '700' : depth === 0 ? '600' : 'normal',
+              color: isSelected ? '#0969da' : theme.text,
+              flex: 1,
+            }}
+          >
+            {label}
+          </Text>
+        </Pressable>
+      );
+    };
+
+    return (
+      <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1, marginTop: 8 }}>
+        {/* Tümü (All) */}
+        {renderTreeItem('Tümü', !category, () => {
+          setCategory(null);
+          setSelectedCategory(null);
+        })}
+
+        {/* Bit Pazarı Category */}
+        <View style={{ marginTop: 12 }}>
+          <Pressable
+            onPress={() => {
+              setCategory('Bit Pazarı');
+              setSelectedCategory(null);
+              setExpandedCats(prev => ({ ...prev, 'Bit Pazarı': !prev['Bit Pazarı'] }));
+            }}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingVertical: 8,
+              borderBottomWidth: 1,
+              borderBottomColor: theme.backgroundSelected,
+              marginBottom: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronRight 
+              size={14} 
+              color={theme.textSecondary} 
+              style={{ 
+                transform: [{ rotate: expandedCats['Bit Pazarı'] ? '90deg' : '0deg' }], 
+                marginRight: 6,
+              }} 
+            />
+            <Text style={{ fontSize: 14, fontWeight: '700', color: category === 'Bit Pazarı' ? '#0969da' : theme.text, flex: 1 }}>
+              Bit Pazarı
+            </Text>
+          </Pressable>
+          {expandedCats['Bit Pazarı'] && (
+            <View style={{ paddingLeft: 8 }}>
+              {FLEA_MARKET_CATEGORIES.map(cat => (
+                renderTreeItem(
+                  cleanCategoryName(cat), 
+                  category === 'Bit Pazarı' && selectedCategory === cat,
+                  () => {
+                    setCategory('Bit Pazarı');
+                    setSelectedCategory(cat);
+                  },
+                  1
+                )
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Üreticiden Tüketiciye Category */}
+        <View style={{ marginTop: 12 }}>
+          <Pressable
+            onPress={() => {
+              setCategory('Üreticiden Tüketiciye');
+              setSelectedCategory(null);
+              setExpandedCats(prev => ({ ...prev, 'Üreticiden Tüketiciye': !prev['Üreticiden Tüketiciye'] }));
+            }}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingVertical: 8,
+              borderBottomWidth: 1,
+              borderBottomColor: theme.backgroundSelected,
+              marginBottom: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronRight 
+              size={14} 
+              color={theme.textSecondary} 
+              style={{ 
+                transform: [{ rotate: expandedCats['Üreticiden Tüketiciye'] ? '90deg' : '0deg' }], 
+                marginRight: 6,
+              }} 
+            />
+            <Text style={{ fontSize: 14, fontWeight: '700', color: category === 'Üreticiden Tüketiciye' ? '#0969da' : theme.text, flex: 1 }}>
+              Üreticiden Tüketiciye
+            </Text>
+          </Pressable>
+          {expandedCats['Üreticiden Tüketiciye'] && (
+            <View style={{ paddingLeft: 8 }}>
+              {PRODUCER_CATEGORIES.map(cat => (
+                renderTreeItem(
+                  cleanCategoryName(cat), 
+                  category === 'Üreticiden Tüketiciye' && selectedCategory === cat,
+                  () => {
+                    setCategory('Üreticiden Tüketiciye');
+                    setSelectedCategory(cat);
+                  },
+                  1
+                )
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Sat / Kirala Category */}
+        <View style={{ marginTop: 12 }}>
+          <Pressable
+            onPress={() => {
+              setCategory('Sat / Kirala');
+              setSelectedCategory(null);
+              setExpandedCats(prev => ({ ...prev, 'Sat / Kirala': !prev['Sat / Kirala'] }));
+            }}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingVertical: 8,
+              borderBottomWidth: 1,
+              borderBottomColor: theme.backgroundSelected,
+              marginBottom: 4,
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronRight 
+              size={14} 
+              color={theme.textSecondary} 
+              style={{ 
+                transform: [{ rotate: expandedCats['Sat / Kirala'] ? '90deg' : '0deg' }], 
+                marginRight: 6,
+              }} 
+            />
+            <Text style={{ fontSize: 14, fontWeight: '700', color: category === 'Sat / Kirala' ? '#0969da' : theme.text, flex: 1 }}>
+              Sat / Kirala
+            </Text>
+          </Pressable>
+          {expandedCats['Sat / Kirala'] && (
+            <View style={{ paddingLeft: 8 }}>
+              {RENTAL_SUB_CATEGORIES.map(cat => (
+                renderTreeItem(
+                  cleanCategoryName(cat), 
+                  category === 'Sat / Kirala' && selectedCategory === cat,
+                  () => {
+                    setCategory('Sat / Kirala');
+                    setSelectedCategory(cat);
+                  },
+                  1
+                )
+              ))}
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    );
+  };
+
+  const renderDesktopTopFilterPills = () => {
+    return (
+      <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center', marginBottom: 20, zIndex: 10 }}>
+        {showLeftArrow && (
+          <Pressable
+            onPress={scrollLeft}
+            style={{
+              position: 'absolute',
+              left: 4,
+              zIndex: 10,
+              backgroundColor: theme.backgroundElement,
+              borderRadius: 16,
+              width: 32,
+              height: 32,
+              justifyContent: 'center',
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: theme.backgroundSelected,
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronLeft size={16} color={theme.text} />
+          </Pressable>
+        )}
+
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ gap: 8, paddingHorizontal: 40, paddingVertical: 4, flexDirection: 'row' }}
+        >
+          {DESKTOP_MAIN_HEADINGS.map((t) => {
+            let isSelected = false;
+            if (t.type === 'reset') {
+              isSelected = !category && selectedFilter === 'all';
+            } else if (t.type === 'filter') {
+              isSelected = selectedFilter === t.filterVal;
+            } else if (t.type === 'category') {
+              isSelected = category === t.categoryVal;
+            }
+
+            return (
+              <Pressable
+                key={t.id}
+                style={[
+                  styles.scrollFilterChip,
+                  { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected, cursor: 'pointer' },
+                  isSelected && styles.activeFilterChip
+                ]}
+                onPress={() => {
+                  if (t.type === 'reset') {
+                    setCategory(null);
+                    setSelectedCategory(null);
+                    setSelectedFilter('all');
+                  } else if (t.type === 'filter') {
+                    setSelectedFilter(t.filterVal as FilterType);
+                    setCategory(null);
+                    setSelectedCategory(null);
+                  } else if (t.type === 'category') {
+                    setCategory(t.categoryVal || null);
+                    setSelectedCategory(null);
+                    setSelectedFilter('all');
+                  }
+                }}
+              >
+                <ThemedText
+                  numberOfLines={1}
+                  style={[styles.filterChipText, isSelected && styles.activeFilterChipText]}
+                >
+                  {t.label}
+                </ThemedText>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {showRightArrow && (
+          <Pressable
+            onPress={scrollRight}
+            style={{
+              position: 'absolute',
+              right: 4,
+              zIndex: 10,
+              backgroundColor: theme.backgroundElement,
+              borderRadius: 16,
+              width: 32,
+              height: 32,
+              justifyContent: 'center',
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: theme.backgroundSelected,
+              cursor: 'pointer',
+            }}
+          >
+            <ChevronRight size={16} color={theme.text} />
+          </Pressable>
+        )}
+      </View>
+    );
+  };
+
   // Grid/List Browse Mode Layout (Default)
   return (
-    <ThemedView style={[styles.container, { backgroundColor: theme.background, paddingTop: Math.max(12, insets.top) }]}>
+    <ThemedView style={[styles.container, { backgroundColor: theme.background }, !isDesktop && { paddingTop: Math.max(12, insets.top) }]}>
       {/* Search & Filter Header Bar */}
       <View style={styles.gridHeaderBar}>
         <View style={[styles.searchContainer, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
@@ -962,7 +1661,7 @@ export default function AuctionsScreen() {
             { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
             !!(selectedCity || selectedFilter !== 'all' || selectedCategory || minPrice || maxPrice || sortBy !== 'default') && {
               borderColor: theme.gold,
-              backgroundColor: 'rgba(255, 107, 0, 0.15)'
+              backgroundColor: 'rgba(9, 105, 218, 0.15)'
             }
           ]}
           onPress={() => setFiltersVisible(true)}
@@ -971,87 +1670,141 @@ export default function AuctionsScreen() {
         </Pressable>
       </View>
 
-      {/* Dynamic Filter Badges */}
-      <View style={styles.filterBadgesContainer}>
-        {category ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 4 }}>
-            {[
-              { id: 'all', label: 'Tümü', value: null },
-              ...(category === 'Bit Pazarı'
-                ? FLEA_MARKET_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
-                : category === 'Üreticiden Tüketiciye'
-                ? PRODUCER_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
-                : RENTAL_SUB_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat })))
-            ].map((t) => {
-              const isSelected = selectedCategory === t.value || (t.value === null && (selectedCategory === null || selectedCategory === category));
-              return (
+      {isDesktop ? (
+        <View style={styles.desktopMainLayout}>
+          {/* Left Column: Category Tree (Arama Ağacı) */}
+          <View style={[styles.desktopLeftSidebar, { borderRightColor: theme.backgroundSelected }]}>
+            <Text style={[styles.desktopSidebarTitle, { color: theme.text }]}>Arama Ağacı</Text>
+            {renderDesktopCategoryTree()}
+          </View>
+
+          {/* Right Column: Top Filter Pills + Products Grid */}
+          <View style={styles.desktopRightContent}>
+            {renderDesktopTopFilterPills()}
+
+            {filteredReels.length === 0 ? (
+              <View style={styles.reelsEmptyContainer}>
+                <SlidersHorizontal size={48} color="#0969da" style={{ marginBottom: 16 }} />
+                <Text style={[styles.reelsEmptyText, { color: theme.textSecondary }]}>Seçilen kriterlere uygun ilan bulunamadı.</Text>
+                <Pressable style={styles.reelsResetButton} onPress={handleResetFilters}>
+                  <Text style={styles.reelsResetButtonText}>Temizle</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[styles.gridListContent, { paddingBottom: 100 }]}
+              >
+                {category || selectedFilter !== 'all' ? (
+                  <View style={{ gap: 12, paddingHorizontal: 4 }}>
+                    {filteredReels.map(renderListItem)}
+                  </View>
+                ) : (
+                  <View style={styles.desktopGrid}>
+                    {filteredReels.map((item, idx) => renderDesktopReelsCard(item, idx))}
+                  </View>
+                )}
+                <WebFooter />
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      ) : (
+        <>
+          {/* Mobile Categories Top Bar (Original, Unmodified) */}
+          <View style={styles.filterBadgesContainer}>
+            {category ? (
+              <ScrollView 
+                horizontal 
+                showsHorizontalScrollIndicator={false} 
+                style={{ flex: 1, width: '100%' }}
+                contentContainerStyle={{ gap: 8, paddingHorizontal: 4, flexDirection: 'row' }}
+              >
+                {[
+                  { id: 'all', label: 'Tümü', value: null },
+                  ...(category === 'Bit Pazarı'
+                    ? FLEA_MARKET_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
+                    : category === 'Üreticiden Tüketiciye'
+                    ? PRODUCER_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat }))
+                    : RENTAL_SUB_CATEGORIES.map(cat => ({ id: cat, label: cat, value: cat })))
+                ].map((t) => {
+                  const isSelected = selectedCategory === t.value || (t.value === null && (selectedCategory === null || selectedCategory === category));
+                  return (
+                    <Pressable
+                      key={t.id}
+                      style={[
+                        styles.scrollFilterChip,
+                        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                        isSelected && styles.activeFilterChip
+                      ]}
+                      onPress={() => setSelectedCategory(t.value)}
+                    >
+                      <ThemedText 
+                        numberOfLines={1} 
+                        style={[styles.filterChipText, isSelected && styles.activeFilterChipText]}
+                      >
+                        {t.label}
+                      </ThemedText>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              [
+                { id: 'all', label: 'Tümü' },
+                { id: 'auction', label: 'Mezat' },
+                { id: 'offer', label: 'Teklifliler' },
+                { id: 'fixed', label: 'Sabit' },
+                { id: 'rent', label: 'Kiralık' }
+              ].map((t) => (
                 <Pressable
                   key={t.id}
                   style={[
                     styles.filterChip,
-                    { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected, flex: 0, paddingHorizontal: 16 },
-                    isSelected && styles.activeFilterChip
+                    { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+                    selectedFilter === t.id && styles.activeFilterChip
                   ]}
-                  onPress={() => setSelectedCategory(t.value)}
+                  onPress={() => setSelectedFilter(t.id as FilterType)}
                 >
-                  <ThemedText style={[styles.filterChipText, isSelected && styles.activeFilterChipText]}>
+                  <ThemedText 
+                    numberOfLines={1} 
+                    style={[styles.filterChipText, selectedFilter === t.id && styles.activeFilterChipText]}
+                  >
                     {t.label}
                   </ThemedText>
                 </Pressable>
-              );
-            })}
-          </ScrollView>
-        ) : (
-          [
-            { id: 'all', label: 'Tümü' },
-            { id: 'auction', label: 'Mezat' },
-            { id: 'offer', label: 'Teklifliler' },
-            { id: 'fixed', label: 'Sabit' },
-            { id: 'rent', label: 'Kiralık' }
-          ].map((t) => (
-            <Pressable
-              key={t.id}
-              style={[
-                styles.filterChip,
-                { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                selectedFilter === t.id && styles.activeFilterChip
-              ]}
-              onPress={() => setSelectedFilter(t.id as FilterType)}
-            >
-              <ThemedText style={[styles.filterChipText, selectedFilter === t.id && styles.activeFilterChipText]}>
-                {t.label}
-              </ThemedText>
-            </Pressable>
-          ))
-        )}
-      </View>
+              ))
+            )}
+          </View>
 
-      {/* Products Grid List */}
-      {filteredReels.length === 0 ? (
-        <View style={styles.reelsEmptyContainer}>
-          <SlidersHorizontal size={48} color="#FF6B00" style={{ marginBottom: 16 }} />
-          <Text style={[styles.reelsEmptyText, { color: theme.textSecondary }]}>Seçilen kriterlere uygun ilan bulunamadı.</Text>
-          <Pressable style={styles.reelsResetButton} onPress={handleResetFilters}>
-            <Text style={styles.reelsResetButtonText}>Temizle</Text>
-          </Pressable>
-        </View>
-      ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={[styles.gridListContent, { paddingBottom: 100 }]}
-        >
-          {category || type ? (
-            <View style={{ gap: 12, paddingHorizontal: 4 }}>
-              {filteredReels.map(renderListItem)}
+          {/* Mobile Products Grid List */}
+          {filteredReels.length === 0 ? (
+            <View style={styles.reelsEmptyContainer}>
+              <SlidersHorizontal size={48} color="#0969da" style={{ marginBottom: 16 }} />
+              <Text style={[styles.reelsEmptyText, { color: theme.textSecondary }]}>Seçilen kriterlere uygun ilan bulunamadı.</Text>
+              <Pressable style={styles.reelsResetButton} onPress={handleResetFilters}>
+                <Text style={styles.reelsResetButtonText}>Temizle</Text>
+              </Pressable>
             </View>
           ) : (
-            <View style={styles.masonryGrid}>
-              <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
-              <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
-              <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
-            </View>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[styles.gridListContent, { paddingBottom: 100 }]}
+            >
+              {category || selectedFilter !== 'all' ? (
+                <View style={{ gap: 12, paddingHorizontal: 4 }}>
+                  {filteredReels.map(renderListItem)}
+                </View>
+              ) : (
+                <View style={styles.masonryGrid}>
+                  <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
+                  <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
+                  <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
+                </View>
+              )}
+            </ScrollView>
           )}
-        </ScrollView>
+        </>
       )}
 
       {/* FILTER MODAL */}
@@ -1087,7 +1840,7 @@ export default function AuctionsScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        selectedFilter === t.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        selectedFilter === t.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setSelectedFilter(t.id as FilterType)}
                     >
@@ -1131,7 +1884,7 @@ export default function AuctionsScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        selectedCategory === c.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        selectedCategory === c.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setSelectedCategory(c.id)}
                     >
@@ -1205,7 +1958,7 @@ export default function AuctionsScreen() {
                           style={[
                             styles.filterBadge,
                             { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                            filterTransmission === v.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                            filterTransmission === v.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                           ]}
                           onPress={() => setFilterTransmission(v.id as any)}
                         >
@@ -1256,7 +2009,7 @@ export default function AuctionsScreen() {
                             style={[
                               styles.filterBadge,
                               { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                              isSelected && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                              isSelected && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                             ]}
                             onPress={() => {
                               if (isSelected) {
@@ -1340,7 +2093,7 @@ export default function AuctionsScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        sortBy === s.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        sortBy === s.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setSortBy(s.id as any)}
                     >
@@ -1407,7 +2160,7 @@ export default function AuctionsScreen() {
                       paddingVertical: 12,
                       paddingHorizontal: 16,
                       borderRadius: 8,
-                      backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                      backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.12)' : 'transparent',
                       flexDirection: 'row',
                       justifyContent: 'space-between',
                       alignItems: 'center',
@@ -1440,7 +2193,7 @@ export default function AuctionsScreen() {
             position: 'absolute',
             bottom: 30, 
             right: 16,
-            backgroundColor: '#FF5500',
+            backgroundColor: '#0969da',
             paddingVertical: 10,
             paddingHorizontal: 14,
             borderRadius: 24,
@@ -1646,7 +2399,7 @@ export default function AuctionsScreen() {
                             style={{ backgroundColor: theme.gold, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6 }}
                             onPress={() => {
                               setCompareModalVisible(false);
-                              router.push(`/product/${item.id}`);
+                              router.push(getListingSeoUrl(item));
                             }}
                           >
                             <Text style={{ color: '#000', fontSize: 9, fontWeight: 'bold' }}>İncele</Text>
@@ -1714,9 +2467,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  scrollFilterChip: {
+    height: 32,
+    borderRadius: 6,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    flexShrink: 0,
+    flexGrow: 0,
+  },
   activeFilterChip: {
-    backgroundColor: '#FF5500',
-    borderColor: '#FF5500',
+    backgroundColor: '#0969da',
+    borderColor: '#0969da',
   },
   filterChipText: {
     fontSize: 11,
@@ -1728,6 +2491,78 @@ const styles = StyleSheet.create({
   gridListContent: {
     paddingHorizontal: 16,
     paddingBottom: 80,
+  },
+  desktopGrid: {
+    display: 'grid' as any,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' as any,
+    gap: 16,
+    width: '100%',
+    paddingVertical: 8,
+  },
+  desktopReelCard: {
+    width: '100%',
+    height: 380,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+    boxShadow: '0px 4px 12px rgba(0,0,0,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  desktopReelCardImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  desktopReelsBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  desktopReelTypeBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  desktopReelTypeBadgeText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  desktopReelCardFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  desktopReelCardTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  desktopReelCardPrice: {
+    color: '#38BDF8',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 4,
   },
   masonryGrid: {
     flexDirection: 'row',
@@ -1791,7 +2626,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   collageCardPrice: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 9,
     fontWeight: 'bold',
     marginTop: 1,
@@ -1841,7 +2676,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
-    backgroundColor: 'rgba(255, 107, 0, 0.85)',
+    backgroundColor: 'rgba(9, 105, 218, 0.85)',
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 8,
@@ -1895,11 +2730,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(255, 85, 0, 0.3)',
+    borderColor: 'rgba(9, 105, 218, 0.3)',
     zIndex: 10,
   },
   timerText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 13,
     fontWeight: 'bold',
   },
@@ -1922,7 +2757,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   gavelButton: {
-    borderColor: 'rgba(255, 85, 0, 0.4)',
+    borderColor: 'rgba(9, 105, 218, 0.4)',
     backgroundColor: 'rgba(7, 12, 25, 0.8)',
   },
   iconLabel: {
@@ -1942,7 +2777,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 8,
     borderTopRightRadius: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 85, 0, 0.1)',
+    borderTopColor: 'rgba(9, 105, 218, 0.1)',
     zIndex: 9,
   },
   sellerRow: {
@@ -1956,7 +2791,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 4,
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
   },
   sellerName: {
     color: '#F8FAFC',
@@ -1972,7 +2807,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingVertical: 3,
     paddingHorizontal: 8,
     borderRadius: 4,
@@ -2005,7 +2840,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   reelsPriceValue: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 18,
     fontWeight: '900',
   },
@@ -2013,7 +2848,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#FF6B00',
+    backgroundColor: '#0969da',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 6,
@@ -2038,15 +2873,15 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   reelsResetButton: {
-    backgroundColor: 'rgba(255, 85, 0, 0.1)',
+    backgroundColor: 'rgba(9, 105, 218, 0.1)',
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 6,
   },
   reelsResetButtonText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     fontSize: 13,
   },
@@ -2184,12 +3019,36 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     height: 38,
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
   },
   reelsAddToCartBtnText: {
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 11,
     letterSpacing: 0.5,
+  },
+  desktopMainLayout: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    flex: 1,
+  },
+  desktopLeftSidebar: {
+    width: 250,
+    paddingRight: 20,
+    borderRightWidth: 1,
+    marginRight: 20,
+    height: '100%',
+  },
+  desktopSidebarTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    marginBottom: 12,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    opacity: 0.8,
+  },
+  desktopRightContent: {
+    flex: 1,
   },
 });

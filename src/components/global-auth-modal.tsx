@@ -27,6 +27,8 @@ export default function GlobalAuthModal() {
   const [sentOtpCode, setSentOtpCode] = useState('');
   const [authError, setAuthError] = useState('');
 
+
+
   React.useEffect(() => {
     if (authModalVisible) {
       setAuthStep('login');
@@ -234,6 +236,7 @@ export default function GlobalAuthModal() {
                 </Pressable>
               </View>
             )}
+
           </View>
         </ThemedView>
       </View>
@@ -245,16 +248,16 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   modalContent: {
     width: '100%',
     maxWidth: 500,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderRadius: 12,
     padding: 24,
-    borderTopWidth: 1,
+    borderWidth: 1,
   },
   modalHeader: {
     flexDirection: 'row',

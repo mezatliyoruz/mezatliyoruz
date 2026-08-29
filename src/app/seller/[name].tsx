@@ -17,7 +17,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAppStore, Listing, Story } from '@/services/store';
+import { useAppStore, Listing, Story, getListingSeoUrl } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -110,7 +110,7 @@ export default function SellerProfileScreen() {
   const router = useRouter();
   const sellerName = typeof name === 'string' ? decodeURIComponent(name) : '';
   
-  const { listings, createChat, stories, currentUser, addStory, reviews } = useAppStore();
+  const { listings, deleteListing, createChat, stories, currentUser, addStory, reviews } = useAppStore();
   const sellerListings = listings.filter((l) => l.sellerName === sellerName);
   const sellerStories = (stories || []).filter(s => s.sellerName === sellerName);
   const hasStories = sellerStories.length > 0;
@@ -243,7 +243,7 @@ export default function SellerProfileScreen() {
             {hasStories ? (
               <Pressable onPress={() => { setStoryViewerVisible(true); setActiveStoryIndex(0); }}>
                 <LinearGradient
-                  colors={['#833ab4', '#fd1d1d', '#fcb045']}
+                  colors={['#38BDF8', '#0969DA', '#4F46E5']}
                   style={styles.storyRing}
                 >
                   <View style={[styles.avatarContainerStory, { backgroundColor: cardBg }]}>
@@ -388,7 +388,7 @@ export default function SellerProfileScreen() {
                         { backgroundColor: itemBg, borderColor: itemBorder },
                         pressed && { opacity: 0.6 }
                       ]}
-                      onPress={() => router.push(`/product/${item.id}`)}
+                      onPress={() => router.push(getListingSeoUrl(item))}
                       hitSlop={10}
                     >
                       <Image
@@ -409,14 +409,14 @@ export default function SellerProfileScreen() {
                             styles.typeBadge,
                             {
                               backgroundColor: item.type === 'auction'
-                                ? 'rgba(255, 107, 0, 0.12)'
+                                ? 'rgba(9, 105, 218, 0.12)'
                                 : item.type === 'offer'
                                 ? 'rgba(147, 51, 234, 0.12)'
                                 : item.type === 'rent'
                                 ? 'rgba(16, 185, 129, 0.12)'
                                 : 'rgba(59, 130, 246, 0.12)',
                               borderColor: item.type === 'auction'
-                                ? 'rgba(255, 107, 0, 0.25)'
+                                ? 'rgba(9, 105, 218, 0.25)'
                                 : item.type === 'offer'
                                 ? 'rgba(147, 51, 234, 0.25)'
                                 : item.type === 'rent'
@@ -441,26 +441,86 @@ export default function SellerProfileScreen() {
                           </View>
                         </View>
                         {currentUser && (sellerName === currentUser.name || sellerName === currentUser.shopName) && (
-                          <Pressable
-                            style={{
-                              alignSelf: 'flex-start',
-                              backgroundColor: 'rgba(255, 107, 0, 0.1)',
-                              borderColor: theme.gold,
-                              borderWidth: 1,
-                              paddingVertical: 4,
-                              paddingHorizontal: 8,
-                              borderRadius: 4,
-                              marginTop: 6,
-                            }}
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              setStoryListingSelect(item);
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.gold }}>
-                              Hikayene Ekle ⚡
-                            </Text>
-                          </Pressable>
+                          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                            <Pressable
+                              style={{
+                                backgroundColor: 'rgba(9, 105, 218, 0.1)',
+                                borderColor: theme.gold,
+                                borderWidth: 1,
+                                paddingVertical: 4,
+                                paddingHorizontal: 8,
+                                borderRadius: 4,
+                              }}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                setStoryListingSelect(item);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.gold }}>
+                                Hikayene Ekle ⚡
+                              </Text>
+                            </Pressable>
+
+                            <Pressable
+                              style={{
+                                backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                                borderColor: '#F59E0B',
+                                borderWidth: 1,
+                                paddingVertical: 4,
+                                paddingHorizontal: 8,
+                                borderRadius: 4,
+                              }}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                router.push(`/create?editId=${item.id}`);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#F59E0B' }}>
+                                ✏️ Düzenle
+                              </Text>
+                            </Pressable>
+
+                            <Pressable
+                              style={{
+                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                borderColor: '#EF4444',
+                                borderWidth: 1,
+                                paddingVertical: 4,
+                                paddingHorizontal: 8,
+                                borderRadius: 4,
+                              }}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                if (Platform.OS === 'web') {
+                                  const confirmed = window.confirm('Bu ilanı silmek istediğinize emin misiniz? Bu işlem geri alınamaz.');
+                                  if (confirmed) {
+                                    deleteListing(item.id);
+                                    alert('İlanınız başarıyla silindi.');
+                                  }
+                                } else {
+                                  Alert.alert(
+                                    'İlanı Sil',
+                                    'Bu ilanı silmek istediğinize emin misiniz? Bu işlem geri alınamaz.',
+                                    [
+                                      { text: 'Vazgeç', style: 'cancel' },
+                                      { 
+                                        text: 'Evet, Sil', 
+                                        style: 'destructive', 
+                                        onPress: () => {
+                                          deleteListing(item.id);
+                                          Alert.alert('Başarılı', 'İlanınız başarıyla silindi.');
+                                        }
+                                      }
+                                    ]
+                                  );
+                                }
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#EF4444' }}>
+                                🗑️ Sil
+                              </Text>
+                            </Pressable>
+                          </View>
                         )}
                       </View>
                       <ChevronRight size={18} color={theme.textSecondary} style={{ marginRight: 8 }} />
@@ -612,11 +672,16 @@ export default function SellerProfileScreen() {
               {sellerStories[activeStoryIndex].productId && (
                 <View style={styles.storyViewerActions}>
                   <Pressable 
-                    style={[styles.storyViewerBtn, { backgroundColor: 'rgba(255, 85, 0, 0.45)', borderColor: 'rgba(255, 85, 0, 0.6)', borderWidth: 1 }]}
+                    style={[styles.storyViewerBtn, { backgroundColor: 'rgba(9, 105, 218, 0.45)', borderColor: 'rgba(9, 105, 218, 0.6)', borderWidth: 1 }]}
                     onPress={() => {
                       const pid = sellerStories[activeStoryIndex].productId;
+                      const storyListing = listings.find(l => l.id === pid);
                       setStoryViewerVisible(false);
-                      router.push(`/product/${pid}`);
+                      if (storyListing) {
+                        router.push(getListingSeoUrl(storyListing));
+                      } else {
+                        router.push(`/product/${pid}`);
+                      }
                     }}
                   >
                     <Text style={styles.storyViewerBtnText}>ÜRÜNE GİT</Text>
@@ -827,7 +892,7 @@ const styles = StyleSheet.create({
   messageBtn: {
     height: 48,
     borderRadius: 8,
-    backgroundColor: '#FF6B00',
+    backgroundColor: '#0969da',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

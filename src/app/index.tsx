@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -22,15 +22,16 @@ import {
 } from 'react-native';
 
 LogBox.ignoreAllLogs(); // Hide warning notifications on the emulator screen
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAppStore, Listing, defaultCollage, Story } from '@/services/store';
+import { useAppStore, Listing, defaultCollage, Story, getListingSeoUrl } from '@/services/store';
 import VideoPlayer from '@/features/feed/components/VideoPlayer';
 import { VideoCacheManager } from '@/services/video-cache';
-import { RENTAL_SUB_CATEGORIES } from './create';
+import { RENTAL_SUB_CATEGORIES } from '@/constants/categories';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import CategoryBadge from '@/components/category-badge';
 import * as LocalAuthentication from 'expo-local-authentication';
+import { LinearGradient } from 'expo-linear-gradient';
 
 
 import { ThemedText } from '@/components/themed-text';
@@ -77,11 +78,15 @@ import {
   Upload,
   FileText,
   GitCompare,
+  LogOut,
+  Megaphone,
+  Camera,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { formatTime } from '@/utils/time';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import WebFooter from '@/components/web-footer';
 import Animated, {
   FadeIn,
   FadeOut,
@@ -257,6 +262,15 @@ function StoryVideoPlayer({ url, isActive }: { url: string; isActive: boolean })
   );
 }
 
+const resolveCollageImage = (img: any) => {
+  if (!img) return undefined;
+  if (typeof img === 'number') return img;
+  if (typeof img === 'string' && !isNaN(Number(img)) && img.trim() !== '') {
+    return Number(img);
+  }
+  if (typeof img === 'object' && img.uri) return img;
+  return { uri: img };
+};
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -268,8 +282,20 @@ export default function HomeScreen() {
   const theme = Colors[scheme === 'dark' ? 'dark' : 'light'];
   const isDark = scheme === 'dark';
 
+  const { openCollageEdit } = useLocalSearchParams<{ openCollageEdit?: string }>();
+  useEffect(() => {
+    if (openCollageEdit === 'leftVertical' || openCollageEdit === 'rightTop' || openCollageEdit === 'rightBottom') {
+      setTimeout(() => {
+        handleStartEditCollage(openCollageEdit as any);
+        router.setParams({ openCollageEdit: undefined } as any);
+      }, 400);
+    }
+  }, [openCollageEdit]);
+
   const { 
     listings, 
+    ads,
+    cmsLoaded,
     toggleLike, 
     toggleFavorite, 
     placeBid, 
@@ -300,6 +326,9 @@ export default function HomeScreen() {
     compareList,
     removeFromCompareList,
     clearCompareList,
+    setCartModalVisible,
+    setCheckoutStep,
+    checkoutStep,
   } = useAppStore();
 
   const [compareModalVisible, setCompareModalVisible] = useState(false);
@@ -466,6 +495,7 @@ export default function HomeScreen() {
   });
  
   const [heroActiveIndex, setHeroActiveIndex] = useState(0);
+  const [isUploadingCollage, setIsUploadingCollage] = useState(false);
 
   // Active auction offer states
   const [bidModalVisible, setBidModalVisible] = useState(false);
@@ -476,9 +506,9 @@ export default function HomeScreen() {
   // Reels feed active index
   const [activeItemIndex, setActiveItemIndex] = useState(0);
 
-  // Cart & Checkout states
-  const [cartModalVisible, setCartModalVisible] = useState(false);
-  const [checkoutStep, setCheckoutStep] = useState<'cart' | 'shipping' | 'payment' | 'success'>('cart');
+  // Cart & Checkout states (Delegated to global store to prevent local state overriding)
+  // const [cartModalVisible, setCartModalVisible] = useState(false);
+  // const [checkoutStep, setCheckoutStep] = useState<'cart' | 'shipping' | 'payment' | 'success'>('cart');
   const [toastMessage, setToastMessage] = useState('');
   const [cartAnimationItem, setCartAnimationItem] = useState<Listing | null>(null);
   
@@ -667,7 +697,7 @@ export default function HomeScreen() {
       const randomId = 'MZ-' + Math.floor(100000 + Math.random() * 900000);
       setOrderId(randomId);
       clearCart();
-      setCheckoutStep('success');
+      setCheckoutStep('completed');
     }
   };
 
@@ -773,19 +803,31 @@ export default function HomeScreen() {
   // Filter listings based on search, section (Level 1), and sub-category (Level 2)
   // Filter listings based on search, section (Level 1), sub-category (Level 2), and feed filters (City, Price, Sort)
   let filteredListings = listings.filter((item) => {
+    // Exclude expired auctions
+    if (item.type === 'auction' && (item.timeLeft === 0 || item.auctionStatus === 'expired' || item.auctionStatus === 'won' || item.auctionStatus === 'purchased')) {
+      return false;
+    }
+    // Exclude vehicles/real estate from live auctions
+    if (item.type === 'auction' && (item.isVehicle || item.isRealEstate)) {
+      return false;
+    }
     if (feedNearbyOnly) {
       if (item.latitude === undefined || item.longitude === undefined) return false;
       const dist = getDistance(USER_LATITUDE, USER_LONGITUDE, item.latitude, item.longitude);
       if (dist > feedMaxDistance) return false;
     }
-    if (item.status === 'pending_approval' || item.status === 'rejected') {
+    if (item.status === 'pending_approval' || item.status === 'rejected' || item.status === 'suspended') {
+      return false;
+    }
+    if (item.stock !== undefined && item.stock <= 0) {
       return false;
     }
 
     const matchesSearch = searchQuery
       ? item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase())
+        item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.listingNumber && item.listingNumber.includes(searchQuery.trim()))
       : true;
 
     if (!matchesSearch) return false;
@@ -905,7 +947,18 @@ export default function HomeScreen() {
 
   // Reels specific filtered listings (only video products)
   const reelsFilteredListings = [...listings].filter((item) => {
-    if (item.status === 'pending_approval' || item.status === 'rejected') {
+    // Exclude expired auctions
+    if (item.type === 'auction' && (item.timeLeft === 0 || item.auctionStatus === 'expired' || item.auctionStatus === 'won' || item.auctionStatus === 'purchased')) {
+      return false;
+    }
+    // Exclude vehicles/real estate from live auctions
+    if (item.type === 'auction' && (item.isVehicle || item.isRealEstate)) {
+      return false;
+    }
+    if (item.status === 'pending_approval' || item.status === 'rejected' || item.status === 'suspended') {
+      return false;
+    }
+    if (item.stock !== undefined && item.stock <= 0) {
       return false;
     }
     if (!item.videoUrl) return false;
@@ -974,16 +1027,81 @@ export default function HomeScreen() {
     reelsFilteredListings.sort((a, b) => b.price - a.price);
   }
 
+  const defaultCompanyAds = [
+    {
+      id: 'default_company_ad_1',
+      isAd: true,
+      title: 'Mezatliyoruz Premium Üyelik Fırsatları!',
+      description: 'Hemen premium üye olun, ilanlarınızı öne çıkarın!',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-gold-pocket-watch-40915-large.mp4',
+      photos: ['https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800'],
+      userName: 'Mezatliyoruz Destek',
+      targetUrl: '/profile',
+    },
+    {
+      id: 'default_company_ad_2',
+      isAd: true,
+      title: 'Antika ve Retro Eşyalarda Dev Müzayede!',
+      description: 'Canlı mezatları takip edin, en özel parçaları kaçırmayın.',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-old-vintage-book-opening-40916-large.mp4',
+      photos: ['https://images.unsplash.com/photo-1512820790803-83ca734da794?w=800'],
+      userName: 'Mezatliyoruz Canlı',
+      targetUrl: '/auctions',
+    }
+  ];
+
+  const mixedReelsListings = useMemo(() => {
+    const activeAds = ads.filter(ad => ad.status === 'active' && ad.videoUrl);
+    const adsPool = activeAds.length > 0 ? activeAds : defaultCompanyAds;
+    
+    const mixedList: any[] = [];
+    let adIdx = 0;
+    
+    reelsFilteredListings.forEach((item, index) => {
+      mixedList.push(item);
+      // Every 5 items, inject 1 ad
+      if ((index + 1) % 5 === 0) {
+        const targetAd = adsPool[adIdx % adsPool.length] as any;
+        const associatedListing = listings.find(l => l.id === targetAd.listingId);
+        mixedList.push({
+          ...targetAd,
+          isAd: true,
+          id: `ad_item_${targetAd.id}_${index}`,
+          photos: targetAd.photos || [associatedListing?.photos[0] || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500'],
+          title: targetAd.title || associatedListing?.title || 'Sponsorlu Reklam',
+          price: associatedListing?.price || 0,
+          type: 'ad',
+          sellerName: targetAd.userName || associatedListing?.sellerName || 'Sponsorlu',
+          listingId: targetAd.listingId || null,
+        });
+        adIdx++;
+      }
+    });
+    return mixedList;
+  }, [reelsFilteredListings, ads, listings]);
+
   // Home Screen Video Products (sorted by ID desc - newest first)
   const reelsProducts = listings
-    .filter((item) => !!item.videoUrl)
+    .filter((item) => {
+      if (item.type === 'auction' && (item.timeLeft === 0 || item.auctionStatus === 'expired' || item.auctionStatus === 'won' || item.auctionStatus === 'purchased')) {
+        return false;
+      }
+      if (item.status === 'pending_approval' || item.status === 'rejected' || item.status === 'suspended') {
+        return false;
+      }
+      if (item.stock !== undefined && item.stock <= 0) {
+        return false;
+      }
+      return !!item.videoUrl;
+    })
     .sort((a, b) => b.id.localeCompare(a.id));
 
   const filteredReelsProducts = reelsProducts.filter((item) => {
     const matchesSearch = searchQuery
       ? item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase())
+        item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.listingNumber && item.listingNumber.includes(searchQuery.trim()))
       : true;
     return matchesSearch;
   });
@@ -999,12 +1117,42 @@ export default function HomeScreen() {
 
   const displayedReelsProducts = filteredReelsProducts.slice(0, visibleReelsLimit);
 
-  // Divide filtered reels products into 3 columns for Masonry Grid
+  const mixedDisplayedReelsProducts = useMemo(() => {
+    const activeAds = ads.filter(ad => ad.status === 'active' && ad.videoUrl);
+    const adsPool = activeAds.length > 0 ? activeAds : defaultCompanyAds;
+    
+    const mixedList: any[] = [];
+    let adIdx = 0;
+    
+    displayedReelsProducts.forEach((item, index) => {
+      mixedList.push(item);
+      // Every 5 items, inject 1 ad
+      if ((index + 1) % 5 === 0) {
+        const targetAd = adsPool[adIdx % adsPool.length] as any;
+        const associatedListing = listings.find(l => l.id === targetAd.listingId);
+        mixedList.push({
+          ...targetAd,
+          isAd: true,
+          id: `ad_item_${targetAd.id}_${index}`,
+          photos: targetAd.photos || [associatedListing?.photos[0] || 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=500'],
+          title: targetAd.title || associatedListing?.title || 'Sponsorlu Reklam',
+          price: associatedListing?.price || 0,
+          type: 'ad',
+          sellerName: targetAd.userName || associatedListing?.sellerName || 'Sponsorlu',
+          listingId: targetAd.listingId || null,
+        });
+        adIdx++;
+      }
+    });
+    return mixedList;
+  }, [displayedReelsProducts, ads, listings]);
+
+  // Divide mixed reels products into 3 columns for Masonry Grid
   const col1: { item: Listing; globalIndex: number }[] = [];
   const col2: { item: Listing; globalIndex: number }[] = [];
   const col3: { item: Listing; globalIndex: number }[] = [];
 
-  displayedReelsProducts.forEach((item, index) => {
+  mixedDisplayedReelsProducts.forEach((item, index) => {
     const packet = { item, globalIndex: index };
     if (index % 3 === 0) col1.push(packet);
     else if (index % 3 === 1) col2.push(packet);
@@ -1046,9 +1194,9 @@ export default function HomeScreen() {
   };
 
   const handleOpenReels = (globalIndex: number) => {
-    const clickedItem = displayedReelsProducts[globalIndex];
+    const clickedItem = mixedDisplayedReelsProducts[globalIndex];
     if (clickedItem) {
-      const reelsIndex = reelsFilteredListings.findIndex(l => l.id === clickedItem.id);
+      const reelsIndex = mixedReelsListings.findIndex(l => l.id === clickedItem.id);
       setActiveItemIndex(reelsIndex >= 0 ? reelsIndex : 0);
     } else {
       setActiveItemIndex(0);
@@ -1058,6 +1206,138 @@ export default function HomeScreen() {
 
   const renderFeedItem = ({ item, index }: { item: Listing; index: number }) => {
     const isActive = index === activeItemIndex;
+
+    // Check if it's an Ad and render the custom Ad Layout
+    if ((item as any).isAd) {
+      const adItem = item as any;
+      const isPreload = index === activeItemIndex + 1 || index === activeItemIndex - 1;
+      const shouldRenderVideo = isActive || isPreload;
+      const displayHeight = isDesktop ? windowHeight - 40 : windowHeight;
+      
+      return (
+        <View style={[styles.cardContainer, { height: displayHeight, width: isDesktop ? 480 : windowWidth, backgroundColor: '#000000' }]}>
+          {shouldRenderVideo ? (
+            <VideoPlayer url={adItem.videoUrl} isActive={isActive} posterUrl={adItem.photos[0]} />
+          ) : (
+            <Image
+              source={typeof adItem.photos[0] === 'number' ? adItem.photos[0] : { uri: adItem.photos[0] }}
+              style={{ width: isDesktop ? 480 : windowWidth, height: displayHeight, resizeMode: 'cover' }}
+            />
+          )}
+
+          {/* Ad Label Tag */}
+          <View style={{
+            position: 'absolute',
+            top: Math.max(16, (insets.top || 20) + 16),
+            left: 16,
+            backgroundColor: 'rgba(245, 158, 11, 0.9)',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 6,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 10
+          }}>
+            <Megaphone size={12} color="#000000" />
+            <Text style={{ color: '#000000', fontSize: 10, fontWeight: '900', letterSpacing: 0.5 }}>SPONSORLU REKLAM</Text>
+          </View>
+
+          {/* Right overlay buttons - Ad version */}
+          <View style={styles.rightOverlay}>
+            <Pressable
+              style={styles.iconButton}
+              onPress={() => {
+                setActiveReelsIndex(null); // Close the Reels Modal
+                setTimeout(() => {
+                  if (adItem.listingId) {
+                    const adListing = listings.find(l => l.id === adItem.listingId);
+                    if (adListing) {
+                      router.push(getListingSeoUrl(adListing));
+                    } else {
+                      router.push(`/product/${adItem.listingId}`);
+                    }
+                  } else if (adItem.targetUrl) {
+                    router.push(adItem.targetUrl);
+                  }
+                }, 100);
+              }}
+            >
+              <ChevronRight size={28} color="#FFFFFF" />
+              <ThemedText style={[styles.iconLabel, { fontSize: 10, fontWeight: 'bold' }]}>İncele</ThemedText>
+            </Pressable>
+            
+            <Pressable
+              style={styles.iconButton}
+              onPress={async () => {
+                try {
+                  await Share.share({
+                    message: `Mezatliyoruz'da sponsorlu bir ilan buldum! ${adItem.title}. Hemen incele!`,
+                  });
+                } catch (e) {
+                  console.warn(e);
+                }
+              }}
+            >
+              <Send size={26} color="#FFFFFF" />
+            </Pressable>
+          </View>
+
+          {/* Bottom details overlay - Ad version */}
+          <View style={[styles.bottomOverlay, { paddingBottom: Math.max(28, (insets.bottom || 0) + 16) }]}>
+            <View style={styles.sellerRow}>
+              <Image source={{ uri: adItem.sellerAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150' }} style={styles.sellerAvatar} />
+              <View>
+                <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' }}>{adItem.sellerName}</Text>
+                <Text style={{ color: '#94A3B8', fontSize: 10 }}>Sponsorlu Üye</Text>
+              </View>
+            </View>
+
+            <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: 'bold', marginVertical: 6 }}>{adItem.title}</Text>
+            <Text style={{ color: '#E2E8F0', fontSize: 12, lineHeight: 17 }} numberOfLines={2}>
+              {adItem.description || 'Detayları görmek için hemen aşağıdaki butona tıklayın!'}
+            </Text>
+
+            <View style={styles.priceAndCtaRow}>
+              {adItem.price > 0 ? (
+                <View>
+                  <Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 2 }}>Ürün Fiyatı</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '900' }}>{adItem.price.toLocaleString('tr-TR')} TL</Text>
+                </View>
+              ) : (
+                <View>
+                  <Text style={{ color: '#94A3B8', fontSize: 11, marginBottom: 2 }}>Partner</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 18, fontWeight: '900' }}>Mezatliyoruz</Text>
+                </View>
+              )}
+
+              <Pressable
+                style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                onPress={() => {
+                  setActiveReelsIndex(null); // Close the Reels Modal
+                  setTimeout(() => {
+                    if (adItem.listingId) {
+                      const adListing = listings.find(l => l.id === adItem.listingId);
+                      if (adListing) {
+                        router.push(getListingSeoUrl(adListing));
+                      } else {
+                        router.push(`/product/${adItem.listingId}`);
+                      }
+                    } else if (adItem.targetUrl) {
+                      router.push(adItem.targetUrl);
+                    }
+                  }, 100);
+                }}
+              >
+                <Text style={[styles.ctaButtonText, { color: '#000000', fontWeight: 'bold' }]}>Detayları Gör</Text>
+                <ChevronRight size={16} color="#000000" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      );
+    }
+
     const mediaItems = [
       { type: 'video', url: item.videoUrl },
       ...item.photos.map((p) => ({ type: 'image', url: p })),
@@ -1112,7 +1392,7 @@ export default function HomeScreen() {
         {/* Real-time Auction Time Left Overlay */}
         {item.type === 'auction' && item.timeLeft !== undefined && (
           <View style={[styles.timerBadge, { top: insets.top + 28 }]}>
-            <Clock size={14} color="#FF6B00" />
+            <Clock size={14} color="#0969da" />
             <ThemedText style={styles.timerText}>
               {item.timeLeft > 0 ? formatTime(item.timeLeft) : 'Süre Doldu'}
             </ThemedText>
@@ -1144,7 +1424,7 @@ export default function HomeScreen() {
               setCartModalVisible(true);
             }}
           >
-            <ShoppingCart size={26} color="#FF6B00" />
+            <ShoppingCart size={26} color="#0969da" />
           </Pressable>
 
           <Pressable 
@@ -1154,8 +1434,8 @@ export default function HomeScreen() {
               alert(`${item.title} için değerlendirme puanı: ${ratingVal} / 5.0`);
             }}
           >
-            <Star size={26} color="#FF6B00" fill="#FF6B00" />
-            <ThemedText type="code" style={[styles.iconLabel, { color: '#FF6B00', fontWeight: 'bold' }]}>
+            <Star size={26} color="#0969da" fill="#0969da" />
+            <ThemedText type="code" style={[styles.iconLabel, { color: '#0969da', fontWeight: 'bold' }]}>
               {item.rating || 4.8}
             </ThemedText>
           </Pressable>
@@ -1235,41 +1515,130 @@ export default function HomeScreen() {
               <ThemedText style={styles.priceValue}>{item.price.toLocaleString('tr-TR')} TL</ThemedText>
             </View>
 
-            {item.type === 'fixed' ? (
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+            {(() => {
+              const isVehicleOrRealEstate = item.isVehicle || item.isRealEstate || 
+                item.category === '🏠 Emlak' || item.category === '🚗 Otomobil' || 
+                item.category === 'Sat / Kirala' || 
+                (item.category && (
+                  item.category.toLowerCase().includes('emlak') || 
+                  item.category.toLowerCase().includes('otomobil') || 
+                  item.category.toLowerCase().includes('araba') ||
+                  item.category.toLowerCase().includes('araç') ||
+                  item.category.toLowerCase().includes('vasıta')
+                )) ||
+                (item.subCategory && (
+                  item.subCategory.toLowerCase().includes('emlak') || 
+                  item.subCategory.toLowerCase().includes('otomobil') || 
+                  item.subCategory.toLowerCase().includes('araba') ||
+                  item.subCategory.toLowerCase().includes('araç') ||
+                  item.subCategory.toLowerCase().includes('vasıta')
+                ));
+
+              const showCartActions = item.type === 'fixed' && !isVehicleOrRealEstate;
+
+              if (showCartActions) {
+                return (
+                  <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        borderColor: '#0969da',
+                        paddingVertical: 7,
+                        paddingHorizontal: 10,
+                        borderRadius: 6,
+                        gap: 4,
+                      }}
+                      onPress={() => {
+                        addToCart(item.id);
+                        if (Platform.OS === 'web') {
+                          alert('Ürün başarıyla sepete eklendi.');
+                        } else {
+                          Alert.alert('Başarılı', 'Ürün başarıyla sepete eklendi.');
+                        }
+                      }}
+                    >
+                      <ShoppingCart size={13} color="#0969da" />
+                      <Text style={{ color: '#0969da', fontSize: 11, fontWeight: 'bold' }}>Sepet</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: '#0969da',
+                        paddingVertical: 8,
+                        paddingHorizontal: 10,
+                        borderRadius: 6,
+                        gap: 4,
+                      }}
+                      onPress={() => {
+                        addToCart(item.id);
+                        setActiveReelsIndex(null);
+                        setTimeout(() => {
+                          setCheckoutStep('shipping');
+                          setCartModalVisible(true);
+                        }, 150);
+                      }}
+                    >
+                      <ShieldCheck size={13} color="#FFFFFF" />
+                      <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: 'bold' }}>Hemen Al</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                        paddingVertical: 8,
+                        paddingHorizontal: 8,
+                        borderRadius: 6,
+                      }}
+                      onPress={() => {
+                        setActiveReelsIndex(null);
+                        setTimeout(() => {
+                          router.push(getListingSeoUrl(item));
+                        }, 150);
+                      }}
+                    >
+                      <Text style={{ color: '#F8FAFC', fontSize: 11, fontWeight: '700' }}>Detay</Text>
+                    </Pressable>
+                  </View>
+                );
+              }
+
+              return (item.type === 'fixed' || item.type === 'rent') ? (
                 <Pressable
-                  style={[styles.reelsAddToCartBtn, { backgroundColor: '#FF5500' }]}
-                  onPress={() => handleAddToCart(item)}
-                >
-                  <Text style={styles.reelsAddToCartBtnText}>Sepete Ekle</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.ctaButton, { backgroundColor: theme.gold }]}
+                  style={styles.ctaButton}
                   onPress={() => {
-                    addToCart(item.id);
-                    setCheckoutStep('cart');
-                    setCartModalVisible(true);
+                    setActiveReelsIndex(null);
+                    setTimeout(() => {
+                      router.push(getListingSeoUrl(item));
+                    }, 150);
                   }}
                 >
-                  <Text style={styles.ctaButtonText}>Hemen Al</Text>
+                  <ThemedText style={styles.ctaButtonText}>Detayları Gör</ThemedText>
+                  <ChevronRight size={16} color="#FFFFFF" />
                 </Pressable>
-              </View>
-            ) : (
-              <Pressable
-                style={styles.ctaButton}
-                onPress={() => {
-                  setActiveReelsIndex(null);
-                  setTimeout(() => {
-                    router.push(`/product/${item.id}`);
-                  }, 150);
-                }}
-              >
-                <ThemedText style={styles.ctaButtonText}>
-                  {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
-                </ThemedText>
-                <ChevronRight size={16} color="#0B132B" />
-              </Pressable>
-            )}
+              ) : (
+                <Pressable
+                  style={styles.ctaButton}
+                  onPress={() => {
+                    setActiveReelsIndex(null);
+                    setTimeout(() => {
+                      router.push(getListingSeoUrl(item));
+                    }, 150);
+                  }}
+                >
+                  <ThemedText style={styles.ctaButtonText}>
+                    {item.type === 'auction' ? 'Teklif Ver' : 'Detayları Gör'}
+                  </ThemedText>
+                  <ChevronRight size={16} color="#FFFFFF" />
+                </Pressable>
+              );
+            })()}
           </View>
         </View>
       </View>
@@ -1279,6 +1648,44 @@ export default function HomeScreen() {
   const renderCollageCard = (packet: { item: Listing; globalIndex: number }) => {
     const { item, globalIndex } = packet;
     const cardHeight = getCardHeight(globalIndex);
+
+    // If it's an ad, render the sponsored ad style card
+    if ((item as any).isAd) {
+      return (
+        <Pressable
+          key={item.id}
+          style={[styles.collageCard, { height: cardHeight, borderWidth: 1.5, borderColor: '#F59E0B' }]}
+          onPress={() => handleOpenReels(globalIndex)}
+        >
+          <Image
+            source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+            style={styles.collageCardImage}
+          />
+
+          {/* Megaphone icon overlay */}
+          <View style={[styles.reelsBadge, { backgroundColor: '#F59E0B' }]}>
+            <Megaphone size={10} color="#000000" />
+          </View>
+
+          {/* Type Badge (Sponsor Style) */}
+          <View style={[styles.collageTypeBadge, { backgroundColor: '#F59E0B' }]}>
+            <Text style={[styles.collageTypeBadgeText, { color: '#000000', fontWeight: 'bold' }]}>
+              SPONSORLU
+            </Text>
+          </View>
+
+          {/* Bottom Glassmorphic Label */}
+          <View style={styles.collageCardFooter}>
+            <Text style={styles.collageCardTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.collageCardPrice}>
+              {item.price > 0 ? `${item.price.toLocaleString('tr-TR')} TL` : 'Tanıtım'}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
 
     return (
       <Pressable
@@ -1303,7 +1710,7 @@ export default function HomeScreen() {
             {
               backgroundColor:
                 item.type === 'auction'
-                  ? 'rgba(255, 107, 0, 0.85)'
+                  ? 'rgba(9, 105, 218, 0.85)'
                   : item.type === 'offer'
                   ? 'rgba(147, 51, 234, 0.85)'
                   : item.type === 'rent'
@@ -1330,10 +1737,112 @@ export default function HomeScreen() {
     );
   };
 
+  const renderDesktopReelsCard = (item: Listing, globalIndex: number) => {
+    // If it's an ad, render the sponsored ad style card for desktop
+    if ((item as any).isAd) {
+      return (
+        <Pressable
+          key={`desktop_reel_${item.id}`}
+          style={({ pressed }) => [
+            styles.desktopReelCard,
+            { borderWidth: 1.5, borderColor: '#F59E0B' },
+            pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }
+          ]}
+          onPress={() => handleOpenReels(globalIndex)}
+        >
+          <Image
+            source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+            style={styles.desktopReelCardImage}
+          />
+
+          <View style={[styles.desktopReelsBadge, { backgroundColor: '#F59E0B' }]}>
+            <Megaphone size={12} color="#000000" />
+          </View>
+
+          <View style={[styles.desktopReelTypeBadge, { backgroundColor: '#F59E0B' }]}>
+            <Text style={[styles.desktopReelTypeBadgeText, { color: '#000000', fontWeight: 'bold' }]}>
+              SPONSORLU
+            </Text>
+          </View>
+
+          <View style={styles.desktopReelCardFooter}>
+            <Text style={styles.desktopReelCardTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.desktopReelCardPrice}>
+              {item.price > 0 ? `${item.price.toLocaleString('tr-TR')} TL` : 'Tanıtım'}
+            </Text>
+          </View>
+        </Pressable>
+      );
+    }
+
+    return (
+      <Pressable
+        key={`desktop_reel_${item.id}`}
+        style={({ pressed }) => [
+          styles.desktopReelCard,
+          pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }
+        ]}
+        onPress={() => handleOpenReels(globalIndex)}
+      >
+        <Image
+          source={typeof item.photos[0] === 'number' ? item.photos[0] : { uri: item.photos[0] }}
+          style={styles.desktopReelCardImage}
+        />
+
+        <View style={styles.desktopReelsBadge}>
+          <Play size={12} color="#FFFFFF" fill="#FFFFFF" />
+        </View>
+
+        <View
+          style={[
+            styles.desktopReelTypeBadge,
+            {
+              backgroundColor:
+                item.type === 'auction'
+                  ? 'rgba(9, 105, 218, 0.9)'
+                  : item.type === 'offer'
+                  ? 'rgba(147, 51, 234, 0.9)'
+                  : item.type === 'rent'
+                  ? 'rgba(139, 92, 246, 0.9)'
+                  : 'rgba(37, 99, 235, 0.9)',
+            },
+          ]}
+        >
+          <Text style={styles.desktopReelTypeBadgeText}>
+            {item.type === 'auction' ? 'MEZAT' : item.type === 'offer' ? 'TEKLİF' : item.type === 'rent' ? 'KİRALIK' : 'SABİT'}
+          </Text>
+        </View>
+
+        <View style={styles.desktopReelCardFooter}>
+          <Text style={styles.desktopReelCardTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          <Text style={styles.desktopReelCardPrice}>
+            {item.price.toLocaleString('tr-TR')} TL
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
   const activeCollage = (currentUser?.role === 'super_admin' ? draftCollage : liveCollage) || defaultCollage;
-  const leftVertical = activeCollage?.leftVertical?.images ? activeCollage.leftVertical : defaultCollage.leftVertical;
-  const rightTop = activeCollage?.rightTop?.images ? activeCollage.rightTop : defaultCollage.rightTop;
-  const rightBottom = activeCollage?.rightBottom?.images ? activeCollage.rightBottom : defaultCollage.rightBottom;
+
+  const getResolvedBox = (box: any, defaultBox: any) => {
+    if (!box) return defaultBox;
+    const resolvedImages = isDesktop 
+      ? (box.imagesWeb && box.imagesWeb.length > 0 ? box.imagesWeb : box.images)
+      : (box.imagesMobile && box.imagesMobile.length > 0 ? box.imagesMobile : box.images);
+    return {
+      ...box,
+      images: resolvedImages || []
+    };
+  };
+
+  const leftVertical = getResolvedBox(activeCollage?.leftVertical, defaultCollage.leftVertical);
+  const rightTop = getResolvedBox(activeCollage?.rightTop, defaultCollage.rightTop);
+  const rightBottom = getResolvedBox(activeCollage?.rightBottom, defaultCollage.rightBottom);
  
   const [collageIndices, setCollageIndices] = useState({
     leftVertical: 0,
@@ -1344,6 +1853,8 @@ export default function HomeScreen() {
   const [editCollageModalVisible, setEditCollageModalVisible] = useState(false);
   const [editingBoxKey, setEditingBoxKey] = useState<'leftVertical' | 'rightTop' | 'rightBottom' | null>(null);
   const [editImages, setEditImages] = useState<string[]>(Array(10).fill(''));
+  const [editImagesWeb, setEditImagesWeb] = useState<string[]>(Array(10).fill(''));
+  const [editImagesMobile, setEditImagesMobile] = useState<string[]>(Array(10).fill(''));
   const [editTitles, setEditTitles] = useState<string[]>(Array(10).fill(''));
   const [editLinks, setEditLinks] = useState<string[]>(Array(10).fill(''));
   const [editLabels, setEditLabels] = useState<string[]>(Array(10).fill(''));
@@ -1511,54 +2022,128 @@ export default function HomeScreen() {
     setEditingBoxKey(boxKey);
     
     const imgArr = Array(10).fill('');
+    const imgWebArr = Array(10).fill('');
+    const imgMobileArr = Array(10).fill('');
     const titleArr = Array(10).fill('');
     const linkArr = Array(10).fill('');
     const labelArr = Array(10).fill('');
     
     for (let i = 0; i < 10; i++) {
       imgArr[i] = targetBox.images?.[i] || '';
+      imgWebArr[i] = targetBox.imagesWeb?.[i] || targetBox.images?.[i] || '';
+      imgMobileArr[i] = targetBox.imagesMobile?.[i] || targetBox.images?.[i] || '';
       titleArr[i] = targetBox.titles?.[i] || '';
       linkArr[i] = targetBox.links?.[i] || targetBox.link || '';
       labelArr[i] = targetBox.labels?.[i] || '';
     }
     
     setEditImages(imgArr);
+    setEditImagesWeb(imgWebArr);
+    setEditImagesMobile(imgMobileArr);
     setEditTitles(titleArr);
     setEditLinks(linkArr);
     setEditLabels(labelArr);
     setEditCollageModalVisible(true);
   };
  
-  const handleSaveCollageDraft = () => {
+   const handleSaveCollageDraft = async () => {
     if (!editingBoxKey) return;
     
-    const finalImages: string[] = [];
-    const finalTitles: string[] = [];
-    const finalLinks: string[] = [];
-    const finalLabels: string[] = [];
-    
-    for (let i = 0; i < 10; i++) {
-      if (editImages[i] && editImages[i].trim() !== '') {
-        finalImages.push(editImages[i].trim());
-        finalTitles.push((editTitles[i] || '').trim());
-        finalLinks.push((editLinks[i] || '').trim());
-        finalLabels.push((editLabels[i] || '').trim());
+    setIsUploadingCollage(true);
+    try {
+      // Ensure anonymous auth before storage upload
+      try {
+        const { getAuth, signInAnonymously } = await import('firebase/auth');
+        const { app } = await import('@/services/firebase');
+        const auth = getAuth(app);
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+      } catch (authErr) {
+        console.warn('Anonymous auth failed:', authErr);
       }
+
+      const finalImages: string[] = [];
+      const finalImagesWeb: string[] = [];
+      const finalImagesMobile: string[] = [];
+      const finalTitles: string[] = [];
+      const finalLinks: string[] = [];
+      const finalLabels: string[] = [];
+      
+      const maxLen = editingBoxKey === 'leftVertical' ? 10 : 1;
+
+      const uploadImageIfNeeded = async (uri: string, index: number, suffix: string) => {
+        if (!uri) return '';
+        if (typeof uri === 'number') return String(uri);
+        
+        let targetUrl = String(uri).trim();
+        if (targetUrl !== '') {
+          if (targetUrl.startsWith('file:') || targetUrl.startsWith('ph:') || targetUrl.startsWith('content:') || targetUrl.includes('blob:') || targetUrl.startsWith('data:')) {
+            try {
+              const { getStorage, ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+              const { app } = await import('@/services/firebase');
+              const storage = getStorage(app);
+              
+              const filename = `collage_${editingBoxKey}_${index}_${suffix}_${Date.now()}.jpg`;
+              const response = await fetch(targetUrl);
+              const blob = await response.blob();
+              const fileRef = ref(storage, `listings/collage/${filename}`);
+              
+              await uploadBytes(fileRef, blob);
+              targetUrl = await getDownloadURL(fileRef);
+            } catch (err: any) {
+              console.error(`Failed uploading ${suffix} image to storage:`, err);
+              throw new Error(`${suffix} Görseli Firebase'e yüklenemedi: ${err.message || err}`);
+            }
+          }
+        }
+        return targetUrl;
+      };
+
+      for (let i = 0; i < maxLen; i++) {
+        // Upload Web Image
+        const rawWeb = editImagesWeb[i];
+        const webUrl = await uploadImageIfNeeded(rawWeb, i, 'web');
+        
+        // Upload Mobile Image
+        const rawMobile = editImagesMobile[i];
+        const mobileUrl = await uploadImageIfNeeded(rawMobile, i, 'mobile');
+
+        // Fallback for legacy main images: use Web URL if available, otherwise Mobile URL
+        const mainUrl = webUrl || mobileUrl || '';
+
+        if (webUrl || mobileUrl) {
+          finalImagesWeb.push(webUrl);
+          finalImagesMobile.push(mobileUrl);
+          finalImages.push(mainUrl);
+          finalTitles.push((editTitles[i] || '').trim());
+          finalLinks.push((editLinks[i] || '').trim());
+          finalLabels.push((editLabels[i] || '').trim());
+        }
+      }
+      
+      const updatedCollage = {
+        ...draftCollage,
+        [editingBoxKey]: {
+          images: finalImages,
+          imagesWeb: finalImagesWeb,
+          imagesMobile: finalImagesMobile,
+          titles: finalTitles,
+          link: finalLinks[0] || '',
+          links: finalLinks,
+          labels: finalLabels,
+        }
+      };
+      
+      updateDraftCollage(updatedCollage);
+      setEditCollageModalVisible(false);
+      alert('Slayt Değişiklikleri Kaydedildi ve Canlıya Aktarıldı!');
+    } catch (e) {
+      console.warn('Error saving collage draft:', e);
+      alert('Kaydederken bir sorun oluştu. Lütfen tekrar deneyin.');
+    } finally {
+      setIsUploadingCollage(false);
     }
-    
-    const updatedCollage = {
-      ...draftCollage,
-      [editingBoxKey]: {
-        images: finalImages,
-        titles: finalTitles,
-        link: finalLinks[0] || '',
-        links: finalLinks,
-        labels: finalLabels,
-      }
-    };
-    updateDraftCollage(updatedCollage);
-    setEditCollageModalVisible(false);
-    alert('Slayt Değişiklikleri Kaydedildi (Taslak)! Canlıya almak için "Slaytları Yayınla" butonuna basın.');
   };
  
   const handlePublishCollage = () => {
@@ -1567,93 +2152,43 @@ export default function HomeScreen() {
   };
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
-      {/* 1. ANNOUNCEMENT BAR WITH CART & NOTIFICATION ICONS */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.gold, paddingRight: 12 }}>
-        <Pressable 
-          style={[styles.announcementBar, { backgroundColor: theme.gold, flex: 1, borderBottomWidth: 0, paddingRight: 4 }]}
-          onPress={() => router.push('/featured-auction')}
-        >
-          <Sparkles size={14} color="#FFFFFF" />
-          <Text style={[styles.announcementText, { color: '#FFFFFF' }]} numberOfLines={1}>
-            Bugün 12:00'da koleksiyon araç mezatı başlıyor! Detayları Gör
-          </Text>
-          <ChevronRight size={14} color="#FFFFFF" />
-        </Pressable>
+    <ThemedView style={[styles.container, !isDesktop && { paddingTop: insets.top }]}>
 
-        {/* Sepet (Cart) ve Bildirim (Notification) İkonları */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          {/* Notification Button */}
-          <Pressable 
-            style={{ position: 'relative', padding: 4 }}
-            onPress={() => setNotificationModalVisible(true)}
-          >
-            {unreadNotificationsCount > 0 && (
-              <View style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                backgroundColor: '#FF3B30',
-                borderRadius: 6,
-                minWidth: 12,
-                height: 12,
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 10,
-              }}>
-                <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{unreadNotificationsCount}</Text>
-              </View>
-            )}
-            <Bell size={18} color="#FFFFFF" />
-          </Pressable>
-
-          {/* Cart Button */}
-          <Pressable 
-            style={{ position: 'relative', padding: 4 }}
-            onPress={() => {
-              setCheckoutStep('cart');
-              setCartModalVisible(true);
-            }}
-          >
-            {cartCount > 0 && (
-              <View style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                backgroundColor: '#FF3B30',
-                borderRadius: 6,
-                minWidth: 12,
-                height: 12,
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 10,
-              }}>
-                <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{cartCount}</Text>
-              </View>
-            )}
-            <ShoppingCart size={18} color="#FFFFFF" />
-          </Pressable>
-        </View>
-      </View>
 
       {/* STORIES FEATURE ROW (Moved below logo header) */}
       {!searchQuery && (
         <View style={[styles.storiesContainer, { borderBottomWidth: 0, paddingVertical: 8 }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storiesScroll}>
-            {/* If user is seller, show "+" Add Story circle first */}
-            {currentUser?.role === 'seller' && (
-              <Pressable style={styles.storyBubbleWrapper} onPress={() => setShareStoryModalVisible(true)}>
-                <View style={[styles.storyCircle, { borderColor: theme.backgroundSelected }]}>
-                  <Image source={{ uri: currentUser.avatar }} style={styles.storyAvatar} />
-                  <View style={[styles.storyAddBadge, { backgroundColor: theme.gold }]}>
-                    <Plus size={12} color="#FFFFFF" />
-                  </View>
-                </View>
-                <Text style={[styles.storyBubbleText, { color: theme.textSecondary }]} numberOfLines={1}>
-                  Hikaye Ekle
-                </Text>
-              </Pressable>
-            )}
+            {/* "+" Add Story circle first */}
+            <Pressable 
+              style={styles.storyBubbleWrapper} 
+              onPress={() => {
+                if (currentUser) {
+                  setShareStoryModalVisible(true);
+                } else {
+                  setAuthModalVisible(true);
+                  setAuthStep('login');
+                  setAuthMode('login');
+                }
+              }}
+            >
+              <View style={[
+                styles.storyCircle, 
+                { 
+                  borderColor: '#0969da', 
+                  borderWidth: 1.5,
+                  borderStyle: 'solid',
+                  justifyContent: 'center', 
+                  alignItems: 'center',
+                  backgroundColor: 'rgba(9, 105, 218, 0.05)'
+                }
+              ]}>
+                <Plus size={22} color="#0969da" strokeWidth={2.5} />
+              </View>
+              <Text style={[styles.storyBubbleText, { color: theme.textSecondary }]} numberOfLines={1}>
+                Hikaye Ekle
+              </Text>
+            </Pressable>
 
             {/* Grouped active stories bubbles (Unread first, read last) */}
             {(() => {
@@ -1679,9 +2214,39 @@ export default function HomeScreen() {
                       setStoryViewerVisible(true);
                     }}
                   >
-                    <View style={[styles.storyCircle, { borderColor: isRead ? theme.backgroundSelected : theme.gold }]}>
-                      <Image source={{ uri: latestStory.sellerAvatar }} style={styles.storyAvatar} />
-                    </View>
+                    {isRead ? (
+                      <View style={[styles.storyCircle, { borderColor: theme.backgroundSelected, justifyContent: 'center', alignItems: 'center' }]}>
+                        <Image source={{ uri: latestStory.sellerAvatar }} style={styles.storyAvatar} />
+                      </View>
+                    ) : (
+                      <LinearGradient
+                        colors={['#38BDF8', '#0969DA', '#4F46E5']}
+                        start={{ x: 0, y: 1 }}
+                        end={{ x: 1, y: 0 }}
+                        style={[
+                          styles.storyCircle, 
+                          { 
+                            borderWidth: 0,
+                            padding: 2, 
+                            justifyContent: 'center', 
+                            alignItems: 'center' 
+                          }
+                        ]}
+                      >
+                        <View style={{
+                          width: '100%',
+                          height: '100%',
+                          borderRadius: 27,
+                          borderWidth: 2,
+                          borderColor: theme.background,
+                          overflow: 'hidden',
+                          justifyContent: 'center',
+                          alignItems: 'center'
+                        }}>
+                          <Image source={{ uri: latestStory.sellerAvatar }} style={{ width: '100%', height: '100%', borderRadius: 27 }} />
+                        </View>
+                      </LinearGradient>
+                    )}
                     <Text style={[styles.storyBubbleText, { color: isRead ? theme.textSecondary : theme.text }]} numberOfLines={1}>
                       {latestStory.sellerName}
                     </Text>
@@ -1693,9 +2258,9 @@ export default function HomeScreen() {
         </View>
       )}
  
-      {/* 3. SEARCH BAR */}
-      <View style={[styles.searchBarContainer, { borderBottomColor: theme.backgroundSelected }]}>
-        <View style={[styles.searchWrapper, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected }]}>
+      {/* 3. SEARCH BAR & MOBILE ACTIONS */}
+      <View style={[styles.searchBarContainer, { borderBottomColor: theme.backgroundSelected, flexDirection: 'row', alignItems: 'center', gap: 12 }]}>
+        <View style={[styles.searchWrapper, { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected, flex: 1 }]}>
           <Search size={18} color={theme.textSecondary} style={{ marginRight: 8 }} />
           <TextInput
             placeholder="Mezat, ürün veya satıcı ara... (örn: Kalem)"
@@ -1713,6 +2278,60 @@ export default function HomeScreen() {
             </Pressable>
           )}
         </View>
+        {!isDesktop && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginRight: 4 }}>
+            {/* Notification Button */}
+            <Pressable 
+              style={{ position: 'relative', padding: 4 }}
+              onPress={() => setNotificationModalVisible(true)}
+            >
+              {unreadNotificationsCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  backgroundColor: '#FF3B30',
+                  borderRadius: 6,
+                  minWidth: 12,
+                  height: 12,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  zIndex: 10,
+                }}>
+                  <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{unreadNotificationsCount}</Text>
+                </View>
+              )}
+              <Bell size={20} color={theme.text} />
+            </Pressable>
+
+            {/* Cart Button */}
+            <Pressable 
+              style={{ position: 'relative', padding: 4 }}
+              onPress={() => {
+                setCheckoutStep('cart');
+                setCartModalVisible(true);
+              }}
+            >
+              {cartCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  backgroundColor: '#FF3B30',
+                  borderRadius: 6,
+                  minWidth: 12,
+                  height: 12,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  zIndex: 10,
+                }}>
+                  <Text style={{ color: '#FFFFFF', fontSize: 7, fontWeight: 'bold' }}>{cartCount}</Text>
+                </View>
+              )}
+              <ShoppingCart size={20} color={theme.text} />
+            </Pressable>
+          </View>
+        )}
       </View>
 
       {/* MAIN CONTENT SCROLL */}
@@ -1729,7 +2348,7 @@ export default function HomeScreen() {
         {/* Admin CMS Bar */}
         {currentUser?.role === 'super_admin' && (
           <View style={styles.adminBar}>
-            <Sparkles size={14} color="#FF6B00" />
+            <Sparkles size={14} color="#0969da" />
             <Text style={styles.adminBarText}>Süper Admin Paneli (Canlı Taslak Modu)</Text>
             <Pressable style={styles.adminPublishBtn} onPress={handlePublishCollage}>
               <Text style={styles.adminPublishBtnText}>Slaytları Yayınla</Text>
@@ -1739,190 +2358,281 @@ export default function HomeScreen() {
 
         {/* ORIGINAL 3-BANNER COLLAGE ROW */}
         {!searchQuery && (
-          <View style={styles.collageSection}>
-            {/* LEFT VERTICAL BOX (Slideshow) */}
-            <Pressable 
-              style={styles.collageLeftCard}
-              onPress={() => {
-                const index = collageIndices.leftVertical % Math.max(1, leftVertical.images.length);
-                const targetLink = leftVertical.links?.[index] || leftVertical.link || '/auctions';
-                if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
-                  setSelectedCategory('Bit Pazarı');
-                } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
-                  setSelectedCategory(targetLink);
-                } else if (targetLink) {
-                  router.push(targetLink as any);
-                } else {
-                  router.push('/auctions' as any);
-                }
-              }}
-            >
-              <Image 
-                source={
-                  (typeof leftVertical.images[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)] === 'number'
-                    ? leftVertical.images[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)]
-                    : { uri: leftVertical.images[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)] }) as any
-                }
-                style={styles.collageImage}
-              />
-              <View style={styles.collageOverlay} />
-              
-              {leftVertical.titles?.[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)] ? (
-                <View style={styles.collageTextContainer}>
-                  <Text style={styles.collageText}>
-                    {leftVertical.titles[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)]}
-                  </Text>
-                </View>
-              ) : null}
+          !cmsLoaded ? (
+            <View style={styles.collageSection}>
+              {/* LEFT VERTICAL BOX Skeleton */}
+              <View 
+                style={[
+                  styles.collageLeftCard, 
+                  { 
+                    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)', 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
+                  }
+                ]}
+              >
+                <ActivityIndicator size="small" color={theme.gold} />
+              </View>
 
-              {currentUser?.role === 'super_admin' && (
+              {/* RIGHT COLUMN Skeleton */}
+              <View style={styles.collageRightColumn}>
+                <View 
+                  style={[
+                    styles.collageRightCard, 
+                    { 
+                      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+                      borderWidth: 1,
+                      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
+                    }
+                  ]} 
+                />
+                <View 
+                  style={[
+                    styles.collageRightCard, 
+                    { 
+                      backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+                      borderWidth: 1,
+                      borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)'
+                    }
+                  ]} 
+                />
+              </View>
+            </View>
+          ) : (
+            <View style={styles.collageSection}>
+              {/* LEFT VERTICAL BOX (Slideshow) */}
+              <Pressable 
+                style={styles.collageLeftCard}
+                onPress={() => {
+                  const index = collageIndices.leftVertical % Math.max(1, leftVertical.images.length);
+                  const targetLink = leftVertical.links?.[index] || leftVertical.link || '/auctions';
+                  if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
+                    setSelectedCategory('Bit Pazarı');
+                  } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
+                    setSelectedCategory(targetLink);
+                  } else if (targetLink) {
+                    router.push(targetLink as any);
+                  } else {
+                    router.push('/auctions' as any);
+                  }
+                }}
+              >
+                <Image 
+                  source={resolveCollageImage(leftVertical.images[collageIndices.leftVertical % Math.max(1, leftVertical.images.length)]) as any}
+                  style={styles.collageImage}
+                />
+
+                {currentUser?.role === 'super_admin' && (
+                  <Pressable 
+                    style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      handleStartEditCollage('leftVertical');
+                    }}
+                  >
+                    <Pencil size={12} color="#FFFFFF" />
+                  </Pressable>
+                )}
+              </Pressable>
+
+              {/* RIGHT COLUMN */}
+              <View style={styles.collageRightColumn}>
+                {/* RIGHT TOP CARD */}
                 <Pressable 
-                  style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    handleStartEditCollage('leftVertical');
+                  style={styles.collageRightCard}
+                  onPress={() => {
+                    const targetLink = rightTop.links?.[0] || rightTop.link || '/auctions';
+                    if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
+                      setSelectedCategory('Bit Pazarı');
+                    } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
+                      setSelectedCategory(targetLink);
+                    } else if (targetLink) {
+                      router.push(targetLink as any);
+                    } else {
+                      router.push('/auctions' as any);
+                    }
                   }}
                 >
-                  <Pencil size={12} color="#FFFFFF" />
+                  <Image 
+                    source={resolveCollageImage(rightTop.images[0]) as any}
+                    style={styles.collageImage}
+                  />
+
+                  {currentUser?.role === 'super_admin' && (
+                    <Pressable 
+                      style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleStartEditCollage('rightTop');
+                      }}
+                    >
+                      <Pencil size={12} color="#FFFFFF" />
+                    </Pressable>
+                  )}
                 </Pressable>
-              )}
-            </Pressable>
 
-            {/* RIGHT COLUMN */}
-            <View style={styles.collageRightColumn}>
-              {/* RIGHT TOP CARD */}
-              <Pressable 
-                style={styles.collageRightCard}
-                onPress={() => {
-                  const targetLink = rightTop.links?.[0] || rightTop.link || '/auctions';
-                  if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
-                    setSelectedCategory('Bit Pazarı');
-                  } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
-                    setSelectedCategory(targetLink);
-                  } else if (targetLink) {
-                    router.push(targetLink as any);
-                  } else {
-                    router.push('/auctions' as any);
-                  }
-                }}
-              >
-                <Image 
-                  source={
-                    typeof rightTop.images[0] === 'number'
-                      ? rightTop.images[0]
-                      : { uri: rightTop.images[0] }
-                  }
-                  style={styles.collageImage}
-                />
-                <View style={styles.collageOverlay} />
-                {rightTop.titles?.[0] ? (
-                  <View style={styles.collageTextContainer}>
-                    <Text style={styles.collageText}>{rightTop.titles[0]}</Text>
-                  </View>
-                ) : null}
+                {/* RIGHT BOTTOM CARD */}
+                <Pressable 
+                  style={styles.collageRightCard}
+                  onPress={() => {
+                    const targetLink = rightBottom.links?.[0] || rightBottom.link || '/profile?openAdModal=true';
+                    if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
+                      setSelectedCategory('Bit Pazarı');
+                    } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
+                      setSelectedCategory(targetLink);
+                    } else if (targetLink) {
+                      router.push(targetLink as any);
+                    } else {
+                      router.push('/profile?openAdModal=true' as any);
+                    }
+                  }}
+                >
+                  <Image 
+                    source={rightBottom.images?.[0] ? resolveCollageImage(rightBottom.images[0]) as any : require('../../assets/images/banner3.jpg')}
+                    style={styles.collageImage}
+                  />
 
-                {currentUser?.role === 'super_admin' && (
-                  <Pressable 
-                    style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      handleStartEditCollage('rightTop');
-                    }}
-                  >
-                    <Pencil size={12} color="#FFFFFF" />
-                  </Pressable>
-                )}
-              </Pressable>
-
-              {/* RIGHT BOTTOM CARD */}
-              <Pressable 
-                style={styles.collageRightCard}
-                onPress={() => {
-                  const targetLink = rightBottom.links?.[0] || rightBottom.link || '/auctions';
-                  if (targetLink === 'bit_pazari' || targetLink === 'bit-pazari') {
-                    setSelectedCategory('Bit Pazarı');
-                  } else if (targetLink && !targetLink.startsWith('/') && !targetLink.startsWith('http')) {
-                    setSelectedCategory(targetLink);
-                  } else if (targetLink) {
-                    router.push(targetLink as any);
-                  } else {
-                    router.push('/auctions' as any);
-                  }
-                }}
-              >
-                <Image 
-                  source={
-                    typeof rightBottom.images[0] === 'number'
-                      ? rightBottom.images[0]
-                      : { uri: rightBottom.images[0] }
-                  }
-                  style={styles.collageImage}
-                />
-                <View style={styles.collageOverlay} />
-                {rightBottom.titles?.[0] ? (
-                  <View style={styles.collageTextContainer}>
-                    <Text style={styles.collageText}>{rightBottom.titles[0]}</Text>
-                  </View>
-                ) : null}
-
-                {currentUser?.role === 'super_admin' && (
-                  <Pressable 
-                    style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      handleStartEditCollage('rightBottom');
-                    }}
-                  >
-                    <Pencil size={12} color="#FFFFFF" />
-                  </Pressable>
-                )}
-              </Pressable>
+                  {currentUser?.role === 'super_admin' && (
+                    <Pressable 
+                      style={[styles.collageEditBadge, { backgroundColor: theme.gold }]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleStartEditCollage('rightBottom');
+                      }}
+                    >
+                      <Pencil size={12} color="#FFFFFF" />
+                    </Pressable>
+                  )}
+                </Pressable>
+              </View>
             </View>
-          </View>
+          )
         )}
 
-        {/* 5. SECTIONS ROW (Level 1) */}
-        {/* 5 DIFFERENT DESIGNS SHOWCASE */}
-        {/* CATEGORIES ROW */}
-        {!searchQuery && (
-          <View style={styles.categoriesSectionSingle}>
-            <View style={styles.categoriesRowSingle}>
-              {[
-                { name: 'Canlı Mezat', IconComponent: Gavel },
-                { name: 'Bit Pazarı', IconComponent: Package },
-                { name: 'Üreticiden Tüketiciye', IconComponent: Handshake },
-                { name: 'Sat / Kirala', IconComponent: Key }
-              ].map((cat) => {
-                const isSelected = selectedCategory === cat.name;
-                const Icon = cat.IconComponent;
-                return (
-                  <Pressable
-                    key={`cat_single_${cat.name}`}
-                    style={styles.categoryItemSingle}
-                    onPress={() => {
-                      if (cat.name === 'Canlı Mezat') {
-                        router.push({ pathname: '/auctions', params: { type: 'auction' } });
-                      } else if (cat.name === 'Bit Pazarı') {
-                        router.push({ pathname: '/auctions', params: { category: 'Bit Pazarı' } });
-                      } else if (cat.name === 'Üreticiden Tüketiciye') {
-                        router.push({ pathname: '/auctions', params: { category: 'Üreticiden Tüketiciye' } });
-                      } else if (cat.name === 'Sat / Kirala') {
-                        router.push({ pathname: '/auctions', params: { category: 'Sat / Kirala' } });
-                      }
-                    }}
-                  >
-                    <View style={styles.categoryIconContainerSingle}>
-                      <Icon size={26} color={isSelected ? theme.gold : theme.textSecondary} strokeWidth={1.5} />
-                    </View>
-                    <Text style={[styles.categoryTextSingle, { color: isSelected ? theme.gold : theme.textSecondary }]}>
-                      {cat.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+        {/* 5. SECTIONS ROW (Level 1) — Tasarım 1: Gradient Zinciri, Açık→Koyu Mavi (Yatay & İnce) */}
+        {!searchQuery && (() => {
+          const catDefs = [
+            {
+              name: 'Canlı Mezat',
+              displayName: 'Mezat',
+              IconComponent: Gavel,
+              gradientColors: ['#60a5fa', '#2563eb'] as [string, string],
+              borderColor: 'rgba(147,197,253,0.5)',
+              iconBg: 'rgba(255,255,255,0.2)',
+              iconColor: '#ffffff',
+            },
+            {
+              name: 'Bit Pazarı',
+              displayName: 'Bit Pazarı',
+              IconComponent: Package,
+              gradientColors: ['#60a5fa', '#2563eb'] as [string, string],
+              borderColor: 'rgba(96,165,250,0.45)',
+              iconBg: 'rgba(255,255,255,0.2)',
+              iconColor: '#ffffff',
+            },
+            {
+              name: 'Üreticiden Tüketiciye',
+              displayName: 'Üretici',
+              IconComponent: Handshake,
+              gradientColors: ['#3b82f6', '#1d4ed8'] as [string, string],
+              borderColor: 'rgba(59,130,246,0.45)',
+              iconBg: 'rgba(255,255,255,0.2)',
+              iconColor: '#ffffff',
+            },
+            {
+              name: 'Sat / Kirala',
+              displayName: 'Sat/Kirala',
+              IconComponent: Key,
+              gradientColors: ['#1d4ed8', '#1e3a8a'] as [string, string],
+              borderColor: 'rgba(29,78,216,0.45)',
+              iconBg: 'rgba(255,255,255,0.2)',
+              iconColor: '#ffffff',
+            },
+          ];
+
+          const handleCatPress = (name: string) => {
+            if (name === 'Canlı Mezat') {
+              router.push({ pathname: '/auctions', params: { type: 'auction' } });
+            } else if (name === 'Bit Pazarı') {
+              router.push({ pathname: '/auctions', params: { category: 'Bit Pazarı' } });
+            } else if (name.startsWith('Üretici')) {
+              router.push({ pathname: '/auctions', params: { category: 'Üreticiden Tüketiciye' } });
+            } else if (name === 'Sat / Kirala') {
+              router.push({ pathname: '/auctions', params: { category: 'Sat / Kirala' } });
+            }
+          };
+
+          return (
+            <View style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {catDefs.map((cat) => {
+                  const Icon = cat.IconComponent;
+                  return (
+                    <Pressable
+                      key={`cat_grd_${cat.name}`}
+                      onPress={() => handleCatPress(cat.name)}
+                      style={({ pressed }) => ({
+                        flex: 1,
+                        borderRadius: 10,
+                        borderWidth: 1,
+                        borderColor: cat.borderColor,
+                        overflow: 'hidden',
+                        opacity: pressed ? 0.82 : 1,
+                        ...(Platform.OS === 'web' ? {
+                          boxShadow: `0 3px 12px ${cat.gradientColors[0]}35`,
+                          cursor: 'pointer',
+                        } : {
+                          elevation: 2,
+                          shadowColor: cat.gradientColors[1],
+                          shadowOffset: { width: 0, height: 2 },
+                          shadowOpacity: 0.2,
+                          shadowRadius: 5,
+                        }),
+                      })}
+                    >
+                      <LinearGradient
+                        colors={cat.gradientColors}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={{
+                          flex: 1,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          paddingVertical: 6,
+                          paddingHorizontal: 4,
+                          gap: 5,
+                        }}
+                      >
+                        <View style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 12,
+                          backgroundColor: cat.iconBg,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          <Icon size={13} color={cat.iconColor} strokeWidth={2.0} />
+                        </View>
+                        <Text style={{
+                          fontSize: isDesktop ? 11 : 8.5,
+                          fontWeight: '800',
+                          color: '#ffffff',
+                          textAlign: 'center',
+                          letterSpacing: 0.1,
+                        }}>
+                          {cat.displayName}
+                        </Text>
+                      </LinearGradient>
+                    </Pressable>
+                  );
+                })}
+              </View>
             </View>
-          </View>
-        )}
+          );
+        })()}
 
         {/* 6. INSTAGRAM EXPLORE REELS COLLAGE */}
         <View style={styles.gridSection}>
@@ -1946,7 +2656,7 @@ export default function HomeScreen() {
                   flexDirection: 'row', 
                   alignItems: 'center', 
                   gap: 6, 
-                  backgroundColor: !!(feedSelectedCity || feedMinPrice || feedMaxPrice || feedSortBy !== 'default') ? 'rgba(255, 85, 0, 0.12)' : theme.backgroundElement,
+                  backgroundColor: !!(feedSelectedCity || feedMinPrice || feedMaxPrice || feedSortBy !== 'default') ? 'rgba(9, 105, 218, 0.12)' : theme.backgroundElement,
                   paddingVertical: 6,
                   paddingHorizontal: 10,
                   borderRadius: 8,
@@ -1961,25 +2671,27 @@ export default function HomeScreen() {
                 </Text>
               </Pressable>
 
-              <Pressable 
-                style={{ 
-                  flexDirection: 'row', 
-                  alignItems: 'center', 
-                  gap: 6, 
-                  backgroundColor: theme.backgroundElement,
-                  paddingVertical: 6,
-                  paddingHorizontal: 10,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: theme.backgroundSelected
-                }}
-                onPress={() => setMapModalVisible(true)}
-              >
-                <MapPin size={13} color={theme.gold} />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>
-                  Haritada Gör
-                </Text>
-              </Pressable>
+              {!isDesktop && (
+                <Pressable 
+                  style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    gap: 6, 
+                    backgroundColor: theme.backgroundElement,
+                    paddingVertical: 6,
+                    paddingHorizontal: 10,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: theme.backgroundSelected
+                  }}
+                  onPress={() => setMapModalVisible(true)}
+                >
+                  <MapPin size={13} color={theme.gold} />
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>
+                    Haritada Gör
+                  </Text>
+                </Pressable>
+              )}
             </View>
           </View>
  
@@ -1996,12 +2708,19 @@ export default function HomeScreen() {
               </Pressable>
             </View>
           ) : (
-            <View style={styles.masonryGrid}>
-              <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
-              <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
-              <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
-            </View>
+            isDesktop ? (
+              <View style={styles.desktopGrid}>
+                {mixedDisplayedReelsProducts.map((item, idx) => renderDesktopReelsCard(item, idx))}
+              </View>
+            ) : (
+              <View style={styles.masonryGrid}>
+                <View style={styles.masonryCol}>{col1.map(renderCollageCard)}</View>
+                <View style={styles.masonryCol}>{col2.map(renderCollageCard)}</View>
+                <View style={styles.masonryCol}>{col3.map(renderCollageCard)}</View>
+              </View>
+            )
           )}
+          {isDesktop && <WebFooter />}
         </View>
       </ScrollView>
  
@@ -2012,69 +2731,71 @@ export default function HomeScreen() {
         animationType="fade"
         onRequestClose={() => setActiveReelsIndex(null)}
       >
-        <View style={styles.reelsModalContainer}>
-          {/* Transparent Header Overlay with Close Button */}
-          <View style={[styles.reelsModalHeader, { top: insets.top || (Platform.OS === 'ios' ? 44 : 20) }]}>
-            <Pressable style={styles.closeReelsButton} onPress={() => setActiveReelsIndex(null)}>
-              <X size={22} color="#F8FAFC" />
-            </Pressable>
-            <Text style={styles.reelsModalTitle}>Canlı Reels Akışı</Text>
-            
-            {/* Letgo style filter button */}
-            <Pressable 
-              style={[
-                styles.closeReelsButton, 
-                !!(reelsSelectedCity || reelsSelectedType || reelsSelectedCategory || reelsMinPrice || reelsMaxPrice || reelsSortBy !== 'default') && { 
-                  borderColor: '#FF6B00', 
-                  backgroundColor: 'rgba(255, 107, 0, 0.15)' 
-                }
-              ]} 
-              onPress={() => setReelsFiltersVisible(true)}
-            >
-              <SlidersHorizontal 
-                size={18} 
-                color={!!(reelsSelectedCity || reelsSelectedType || reelsSelectedCategory || reelsMinPrice || reelsMaxPrice || reelsSortBy !== 'default') ? '#FF6B00' : '#F8FAFC'} 
-              />
-            </Pressable>
-          </View>
- 
-          {reelsFilteredListings.length === 0 ? (
-            <View style={styles.reelsEmptyContainer}>
-              <SlidersHorizontal size={48} color="#FF6B00" style={{ marginBottom: 16 }} />
-              <Text style={styles.reelsEmptyText}>Seçilen kriterlere uygun Reels bulunamadı.</Text>
-              <Pressable
-                style={styles.reelsResetButton}
-                onPress={handleResetReelsFilters}
+        <View style={[styles.reelsModalContainer, isDesktop && { alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0, 0, 0, 0.85)' }]}>
+          <View style={isDesktop ? { width: 480, height: windowHeight - 40, position: 'relative', borderRadius: 12, overflow: 'hidden', backgroundColor: '#000000', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' } : { flex: 1, width: '100%' }}>
+            {/* Transparent Header Overlay with Close Button */}
+            <View style={[styles.reelsModalHeader, isDesktop ? { position: 'absolute', top: 10, left: 0, right: 0 } : { top: insets.top || (Platform.OS === 'ios' ? 44 : 20) }]}>
+              <Pressable style={styles.closeReelsButton} onPress={() => setActiveReelsIndex(null)}>
+                <X size={22} color="#F8FAFC" />
+              </Pressable>
+              <Text style={styles.reelsModalTitle}>Canlı Reels Akışı</Text>
+              
+              {/* Letgo style filter button */}
+              <Pressable 
+                style={[
+                  styles.closeReelsButton, 
+                  !!(reelsSelectedCity || reelsSelectedType || reelsSelectedCategory || reelsMinPrice || reelsMaxPrice || reelsSortBy !== 'default') && { 
+                    borderColor: '#0969da', 
+                    backgroundColor: 'rgba(9, 105, 218, 0.15)' 
+                  }
+                ]} 
+                onPress={() => setReelsFiltersVisible(true)}
               >
-                <Text style={styles.reelsResetButtonText}>Filtreleri Sıfırla</Text>
+                <SlidersHorizontal 
+                  size={18} 
+                  color={!!(reelsSelectedCity || reelsSelectedType || reelsSelectedCategory || reelsMinPrice || reelsMaxPrice || reelsSortBy !== 'default') ? '#0969da' : '#F8FAFC'} 
+                />
               </Pressable>
             </View>
-          ) : (
-            <FlatList
-              ref={reelsFlatListRef}
-              data={reelsFilteredListings}
-              renderItem={renderFeedItem}
-              keyExtractor={(item) => `reel_${item.id}`}
-              pagingEnabled
-              showsVerticalScrollIndicator={false}
-              onViewableItemsChanged={onViewableItemsChanged}
-              viewabilityConfig={viewabilityConfig}
-              initialScrollIndex={
-                (activeReelsIndex !== null && displayedReelsProducts[activeReelsIndex]) 
-                  ? Math.max(0, reelsFilteredListings.findIndex(l => l.id === displayedReelsProducts[activeReelsIndex].id))
-                  : 0
-              }
-              getItemLayout={(data, index) => ({
-                length: isDesktop ? windowHeight - 40 : windowHeight,
-                offset: (isDesktop ? windowHeight - 40 : windowHeight) * index,
-                index,
-              })}
-              windowSize={3}
-              maxToRenderPerBatch={1}
-              initialNumToRender={1}
-              removeClippedSubviews={Platform.OS === 'android'}
-            />
-          )}
+  
+            {reelsFilteredListings.length === 0 ? (
+              <View style={styles.reelsEmptyContainer}>
+                <SlidersHorizontal size={48} color="#0969da" style={{ marginBottom: 16 }} />
+                <Text style={styles.reelsEmptyText}>Seçilen kriterlere uygun Reels bulunamadı.</Text>
+                <Pressable
+                  style={styles.reelsResetButton}
+                  onPress={handleResetReelsFilters}
+                >
+                  <Text style={styles.reelsResetButtonText}>Filtreleri Sıfırla</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <FlatList
+                ref={reelsFlatListRef}
+                data={mixedReelsListings}
+                renderItem={renderFeedItem}
+                keyExtractor={(item) => `reel_${item.id}`}
+                pagingEnabled
+                showsVerticalScrollIndicator={false}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
+                initialScrollIndex={
+                  (activeReelsIndex !== null && mixedDisplayedReelsProducts[activeReelsIndex]) 
+                    ? Math.max(0, mixedReelsListings.findIndex(l => l.id === mixedDisplayedReelsProducts[activeReelsIndex].id))
+                    : 0
+                }
+                getItemLayout={(data, index) => ({
+                  length: isDesktop ? windowHeight - 40 : windowHeight,
+                  offset: (isDesktop ? windowHeight - 40 : windowHeight) * index,
+                  index,
+                })}
+                windowSize={3}
+                maxToRenderPerBatch={1}
+                initialNumToRender={1}
+                removeClippedSubviews={Platform.OS === 'android'}
+              />
+            )}
+          </View>
         </View>
       </Modal>
 
@@ -2136,7 +2857,7 @@ export default function HomeScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        reelsSelectedType === t.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        reelsSelectedType === t.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setReelsSelectedType(t.id)}
                     >
@@ -2167,7 +2888,7 @@ export default function HomeScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        reelsSelectedCategory === cat.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        reelsSelectedCategory === cat.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setReelsSelectedCategory(cat.id)}
                     >
@@ -2217,7 +2938,7 @@ export default function HomeScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        reelsSortBy === s.id && { backgroundColor: 'rgba(255, 107, 0, 0.15)', borderColor: theme.gold }
+                        reelsSortBy === s.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setReelsSortBy(s.id)}
                     >
@@ -2378,7 +3099,7 @@ export default function HomeScreen() {
                           style={[
                             styles.filterBadge,
                             { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                            feedTransmission === v.id && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
+                            feedTransmission === v.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                           ]}
                           onPress={() => setFeedTransmission(v.id as any)}
                         >
@@ -2429,7 +3150,7 @@ export default function HomeScreen() {
                             style={[
                               styles.filterBadge,
                               { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                              isSelected && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
+                              isSelected && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                             ]}
                             onPress={() => {
                               if (isSelected) {
@@ -2465,7 +3186,7 @@ export default function HomeScreen() {
                       style={[
                         styles.filterBadge,
                         { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-                        feedSortBy === s.id && { backgroundColor: 'rgba(255, 85, 0, 0.15)', borderColor: theme.gold }
+                        feedSortBy === s.id && { backgroundColor: 'rgba(9, 105, 218, 0.15)', borderColor: theme.gold }
                       ]}
                       onPress={() => setFeedSortBy(s.id)}
                     >
@@ -2504,7 +3225,7 @@ export default function HomeScreen() {
                             borderRadius: 16,
                             borderWidth: 1,
                             borderColor: feedMaxDistance === dist ? theme.gold : theme.backgroundSelected,
-                            backgroundColor: feedMaxDistance === dist ? 'rgba(255, 85, 0, 0.15)' : 'transparent',
+                            backgroundColor: feedMaxDistance === dist ? 'rgba(9, 105, 218, 0.15)' : 'transparent',
                           }}
                           onPress={() => setFeedMaxDistance(dist)}
                         >
@@ -2585,7 +3306,7 @@ export default function HomeScreen() {
                     borderRadius: 12,
                     borderWidth: 1,
                     borderColor: feedMaxDistance === dist ? theme.gold : theme.backgroundSelected,
-                    backgroundColor: feedMaxDistance === dist ? 'rgba(255, 85, 0, 0.15)' : 'transparent',
+                    backgroundColor: feedMaxDistance === dist ? 'rgba(9, 105, 218, 0.15)' : 'transparent',
                   }}
                   onPress={() => setFeedMaxDistance(dist)}
                 >
@@ -2727,7 +3448,7 @@ export default function HomeScreen() {
                     }}
                     onPress={() => {
                       setMapModalVisible(false);
-                      router.push(`/product/${selectedListing.id}`);
+                      router.push(getListingSeoUrl(selectedListing));
                     }}
                   >
                     <Text style={{ color: '#000000', fontSize: 13, fontWeight: 'bold' }}>Ürünü İncele & Teklif Ver</Text>
@@ -2752,7 +3473,7 @@ export default function HomeScreen() {
             position: 'absolute',
             bottom: 90, 
             right: 16,
-            backgroundColor: '#FF5500',
+            backgroundColor: '#0969da',
             paddingVertical: 10,
             paddingHorizontal: 14,
             borderRadius: 24,
@@ -2958,7 +3679,7 @@ export default function HomeScreen() {
                             style={{ backgroundColor: theme.gold, paddingVertical: 4, paddingHorizontal: 10, borderRadius: 6 }}
                             onPress={() => {
                               setCompareModalVisible(false);
-                              router.push(`/product/${item.id}`);
+                              router.push(getListingSeoUrl(item));
                             }}
                           >
                             <Text style={{ color: '#000', fontSize: 9, fontWeight: 'bold' }}>İncele</Text>
@@ -3029,7 +3750,7 @@ export default function HomeScreen() {
                         <TextInput
                           placeholder={
                             selectedListing.type === 'auction'
-                              ? `Minimum teklif: ${selectedListing.price + 100} TL`
+                              ? `Minimum teklif: ${selectedListing.price + (selectedListing.minIncrement || 10)} TL`
                               : 'Teklifinizi buraya yazın...'
                           }
                           placeholderTextColor={theme.textSecondary}
@@ -3059,7 +3780,7 @@ export default function HomeScreen() {
         {/* FLOAT TOAST FEEDBACK FOR CART ADD */}
         {toastMessage !== '' && (
           <View style={[styles.toastContainer, { top: insets.top + 70 }]}>
-            <ShoppingCart size={14} color="#FF6B00" style={{ marginRight: 6 }} />
+            <ShoppingCart size={14} color="#0969da" style={{ marginRight: 6 }} />
             <Text style={styles.toastText}>{toastMessage}</Text>
           </View>
         )}
@@ -3074,45 +3795,221 @@ export default function HomeScreen() {
           onRequestClose={() => setEditCollageModalVisible(false)}
         >
           <View style={styles.modalBackdrop}>
-            <ThemedView type="backgroundElement" style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <ThemedText style={styles.modalTitle}>
-                  Ana Slayt Karuseli Düzenle
+            <ThemedView 
+              type="backgroundElement" 
+              style={[
+                styles.modalContent, 
+                { 
+                  maxHeight: '90%', 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  paddingBottom: 16,
+                  paddingTop: 16,
+                  overflow: 'hidden'
+                }
+              ]}
+            >
+              {/* Pinned Header */}
+              <View style={[styles.modalHeader, { marginBottom: 12 }]}>
+                <ThemedText style={[styles.modalTitle, { fontSize: 13, fontWeight: '800' }]}>
+                  {editingBoxKey === 'leftVertical' 
+                    ? 'Sol Dikey Slayt Karuseli Düzenle' 
+                    : editingBoxKey === 'rightTop' 
+                    ? 'Sağ Üst Görsel Alanı Düzenle' 
+                    : 'Sağ Alt Görsel Alanı Düzenle'}
                 </ThemedText>
                 <Pressable onPress={() => setEditCollageModalVisible(false)}>
                   <X size={20} color={theme.text} />
                 </Pressable>
               </View>
  
-              <ScrollView contentContainerStyle={styles.modalBody} showsVerticalScrollIndicator={false}>
-                <ThemedText style={{ color: theme.textSecondary, marginBottom: 8 }}>
-                  Karusel slaytları için en fazla 10 adet görsel, başlık, etiket ve yönlendirme bağlantısı (link) tanımlayın. Boş bırakılan alanlar listeden otomatik elenir.
+              {/* Scrollable Body */}
+              <ScrollView 
+                style={{ flex: 1 }}
+                contentContainerStyle={[styles.modalBody, { paddingBottom: 16 }]} 
+                showsVerticalScrollIndicator={true}
+              >
+                <ThemedText style={{ color: theme.textSecondary, marginBottom: 8, fontSize: 12, lineHeight: 17 }}>
+                  {editingBoxKey === 'leftVertical'
+                    ? 'Karusel slaytları için en fazla 10 adet görsel, başlık, etiket ve yönlendirme bağlantısı (link) tanımlayın. Boş bırakılan alanlar listeden otomatik elenir.'
+                    : 'Bu alan için görsel adresi ve tıklandığında yönlendirilecek bağlantıyı (link) tanımlayın.'}
                 </ThemedText>
  
-                {Array(10).fill(0).map((_, i) => (
-                  <View key={`edit_slide_${i}`} style={{ borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected, paddingBottom: 16, marginBottom: 16, gap: 8 }}>
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: theme.gold }}>Slayt {i + 1}</Text>
+                {Array(editingBoxKey === 'leftVertical' ? 10 : 1).fill(0).map((_, i) => (
+                  <View key={`edit_slide_${i}`} style={{ borderBottomWidth: 1, borderBottomColor: theme.backgroundSelected, paddingBottom: 16, marginBottom: 8, gap: 8 }}>
+                    {editingBoxKey === 'leftVertical' && (
+                      <Text style={{ fontSize: 13, fontWeight: 'bold', color: theme.gold, marginBottom: 4 }}>Slayt {i + 1}</Text>
+                    )}
                     
+                    {/* WEB IMAGE FIELD */}
                     <View style={styles.formGroup}>
-                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Görsel Adresi {i + 1}</Text>
-                      <TextInput
-                        style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                        placeholder="https://images.unsplash.com/..."
-                        placeholderTextColor={theme.textSecondary}
-                        value={editImages[i]}
-                        onChangeText={(val) => {
-                          const copy = [...editImages];
-                          copy[i] = val;
-                          setEditImages(copy);
-                        }}
-                      />
+                      <Text style={[styles.formLabel, { color: theme.textSecondary, fontWeight: 'bold' }]}>
+                        🖥️ Web Görseli (Oran: {editingBoxKey === 'leftVertical' ? '5/2 - 1000x400 px' : '5/1 - 1000x200 px'})
+                      </Text>
+                      
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+                        {editImagesWeb[i] ? (
+                          <View style={{ position: 'relative', width: 60, height: 60, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: theme.backgroundSelected }}>
+                            <Image 
+                              source={typeof editImagesWeb[i] === 'number' ? editImagesWeb[i] : { uri: editImagesWeb[i] }} 
+                              style={{ width: '100%', height: '100%', resizeMode: 'cover' }} 
+                            />
+                            <Pressable 
+                              onPress={() => {
+                                const copy = [...editImagesWeb];
+                                copy[i] = '';
+                                setEditImagesWeb(copy);
+                              }}
+                              style={{ position: 'absolute', top: 2, right: 2, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                            >
+                              <X size={12} color="#FFFFFF" />
+                            </Pressable>
+                          </View>
+                        ) : null}
+
+                        <Pressable
+                          onPress={async () => {
+                            try {
+                              const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                              if (!permissionResult.granted) {
+                                alert("Galeri izni gereklidir.");
+                                return;
+                              }
+                              const result = await ImagePicker.launchImageLibraryAsync({
+                                mediaTypes: ['images'],
+                                allowsEditing: true,
+                                quality: 0.8,
+                              });
+
+                              if (!result.canceled && result.assets?.[0]?.uri) {
+                                let finalUri = result.assets[0].uri;
+                                try {
+                                  const { manipulateAsync, SaveFormat } = await import('expo-image-manipulator');
+                                  const manipResult = await manipulateAsync(
+                                    finalUri,
+                                    [{ resize: { width: 1200 } }],
+                                    { compress: 0.7, format: SaveFormat.JPEG }
+                                  );
+                                  finalUri = manipResult.uri;
+                                } catch (err) {
+                                  console.warn('Failed to compress collage slide image:', err);
+                                }
+                                const copy = [...editImagesWeb];
+                                copy[i] = finalUri;
+                                setEditImagesWeb(copy);
+                              }
+                            } catch (e) {
+                              console.warn('Error picking collage image:', e);
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            height: 38,
+                            borderRadius: 6,
+                            borderWidth: 1,
+                            borderColor: theme.gold,
+                            backgroundColor: 'rgba(217, 119, 6, 0.02)',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <Camera size={14} color={theme.gold} />
+                          <Text style={{ color: theme.gold, fontSize: 12, fontWeight: 'bold' }}>
+                            {editImagesWeb[i] ? 'Görseli Değiştir' : 'Cihazdan Web Görseli Yükle'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+
+                    {/* MOBILE IMAGE FIELD */}
+                    <View style={styles.formGroup}>
+                      <Text style={[styles.formLabel, { color: theme.textSecondary, fontWeight: 'bold' }]}>
+                        📱 Mobil Görseli (Oran: {editingBoxKey === 'leftVertical' ? '2/3 - 400x600 px' : '5/3 - 500x300 px'})
+                      </Text>
+                      
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+                        {editImagesMobile[i] ? (
+                          <View style={{ position: 'relative', width: 60, height: 60, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: theme.backgroundSelected }}>
+                            <Image 
+                              source={typeof editImagesMobile[i] === 'number' ? editImagesMobile[i] : { uri: editImagesMobile[i] }} 
+                              style={{ width: '100%', height: '100%', resizeMode: 'cover' }} 
+                            />
+                            <Pressable 
+                              onPress={() => {
+                                const copy = [...editImagesMobile];
+                                copy[i] = '';
+                                setEditImagesMobile(copy);
+                              }}
+                              style={{ position: 'absolute', top: 2, right: 2, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                            >
+                              <X size={12} color="#FFFFFF" />
+                            </Pressable>
+                          </View>
+                        ) : null}
+
+                        <Pressable
+                          onPress={async () => {
+                            try {
+                              const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                              if (!permissionResult.granted) {
+                                alert("Galeri izni gereklidir.");
+                                return;
+                              }
+                              const result = await ImagePicker.launchImageLibraryAsync({
+                                mediaTypes: ['images'],
+                                allowsEditing: true,
+                                quality: 0.8,
+                              });
+
+                              if (!result.canceled && result.assets?.[0]?.uri) {
+                                let finalUri = result.assets[0].uri;
+                                try {
+                                  const { manipulateAsync, SaveFormat } = await import('expo-image-manipulator');
+                                  const manipResult = await manipulateAsync(
+                                    finalUri,
+                                    [{ resize: { width: 800 } }],
+                                    { compress: 0.7, format: SaveFormat.JPEG }
+                                  );
+                                  finalUri = manipResult.uri;
+                                } catch (err) {
+                                  console.warn('Failed to compress collage slide image:', err);
+                                }
+                                const copy = [...editImagesMobile];
+                                copy[i] = finalUri;
+                                setEditImagesMobile(copy);
+                              }
+                            } catch (e) {
+                              console.warn('Error picking collage image:', e);
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            height: 38,
+                            borderRadius: 6,
+                            borderWidth: 1,
+                            borderColor: theme.gold,
+                            backgroundColor: 'rgba(217, 119, 6, 0.02)',
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          <Camera size={14} color={theme.gold} />
+                          <Text style={{ color: theme.gold, fontSize: 12, fontWeight: 'bold' }}>
+                            {editImagesMobile[i] ? 'Görseli Değiştir' : 'Cihazdan Mobil Görseli Yükle'}
+                          </Text>
+                        </Pressable>
+                      </View>
                     </View>
  
                     <View style={styles.formGroup}>
-                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Slayt Başlığı {i + 1}</Text>
+                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Başlık / Etiket {editingBoxKey === 'leftVertical' ? i + 1 : ''}</Text>
                       <TextInput
                         style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                        placeholder="Örn: Özel Koleksiyon Mezatı - Keşfet"
+                        placeholder="Örn: Müzayede Başlığı"
                         placeholderTextColor={theme.textSecondary}
                         value={editTitles[i]}
                         onChangeText={(val) => {
@@ -3123,26 +4020,28 @@ export default function HomeScreen() {
                       />
                     </View>
  
-                    <View style={styles.formGroup}>
-                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Etiket {i + 1} (Örn: ÖNE ÇIKAN)</Text>
-                      <TextInput
-                        style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                        placeholder="Örn: KAMPANYA"
-                        placeholderTextColor={theme.textSecondary}
-                        value={editLabels[i]}
-                        onChangeText={(val) => {
-                          const copy = [...editLabels];
-                          copy[i] = val;
-                          setEditLabels(copy);
-                        }}
-                      />
-                    </View>
+                    {editingBoxKey === 'leftVertical' && (
+                      <View style={styles.formGroup}>
+                        <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Rozet Etiketi {i + 1} (Örn: ÖNE ÇIKAN)</Text>
+                        <TextInput
+                          style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
+                          placeholder="Örn: KAMPANYA"
+                          placeholderTextColor={theme.textSecondary}
+                          value={editLabels[i]}
+                          onChangeText={(val) => {
+                            const copy = [...editLabels];
+                            copy[i] = val;
+                            setEditLabels(copy);
+                          }}
+                        />
+                      </View>
+                    )}
  
                     <View style={styles.formGroup}>
-                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Yönlendirme Bağlantısı {i + 1}</Text>
+                      <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Yönlendirme Bağlantısı (Link) {editingBoxKey === 'leftVertical' ? i + 1 : ''}</Text>
                       <TextInput
                         style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, backgroundColor: 'rgba(255,255,255,0.02)' }]}
-                        placeholder="Örn: /featured-auction, /auctions, bit_pazari"
+                        placeholder="Örn: /profile?openAdModal=true veya /auctions"
                         placeholderTextColor={theme.textSecondary}
                         value={editLinks[i]}
                         onChangeText={(val) => {
@@ -3154,11 +4053,27 @@ export default function HomeScreen() {
                     </View>
                   </View>
                 ))}
- 
-                <Pressable style={styles.submitButton} onPress={handleSaveCollageDraft}>
-                  <Text style={styles.submitButtonText}>Taslak Olarak Kaydet</Text>
-                </Pressable>
               </ScrollView>
+
+              {/* Pinned Action Buttons Footer */}
+              <View style={{ flexDirection: 'row', gap: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: theme.backgroundSelected }}>
+                <Pressable 
+                  disabled={isUploadingCollage}
+                  style={[styles.submitButton, { flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: '#EF4444', marginTop: 0 }]} 
+                  onPress={() => setEditCollageModalVisible(false)}
+                >
+                  <Text style={[styles.submitButtonText, { color: '#EF4444', fontSize: 13 }]}>İptal</Text>
+                </Pressable>
+                <Pressable 
+                  disabled={isUploadingCollage}
+                  style={[styles.submitButton, { flex: 2, backgroundColor: isUploadingCollage ? 'rgba(9, 105, 218, 0.5)' : theme.gold, marginTop: 0 }]} 
+                  onPress={handleSaveCollageDraft}
+                >
+                  <Text style={[styles.submitButtonText, { color: isUploadingCollage ? '#FFFFFF' : '#000000', fontWeight: 'bold', fontSize: 13 }]}>
+                    {isUploadingCollage ? 'Görseller Yükleniyor...' : 'Taslak Kaydet'}
+                  </Text>
+                </Pressable>
+              </View>
             </ThemedView>
           </View>
         </Modal>
@@ -3202,7 +4117,7 @@ export default function HomeScreen() {
                     }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
                         {storyMediaType === 'video' ? (
-                          <View style={{ width: 44, height: 44, borderRadius: 6, backgroundColor: 'rgba(255, 85, 0, 0.1)', alignItems: 'center', justifyContent: 'center' }}>
+                          <View style={{ width: 44, height: 44, borderRadius: 6, backgroundColor: 'rgba(9, 105, 218, 0.1)', alignItems: 'center', justifyContent: 'center' }}>
                             <Play size={20} color={theme.gold} fill={theme.gold} />
                           </View>
                         ) : (
@@ -3445,11 +4360,16 @@ export default function HomeScreen() {
  
                   {activeStoryList[activeStoryIndex].productId && (
                     <Pressable 
-                      style={[styles.storyViewerBtn, { backgroundColor: 'rgba(255, 85, 0, 0.25)', borderColor: 'rgba(255, 85, 0, 0.4)' }]}
+                      style={[styles.storyViewerBtn, { backgroundColor: 'rgba(9, 105, 218, 0.25)', borderColor: 'rgba(9, 105, 218, 0.4)' }]}
                       onPress={() => {
                         const pid = activeStoryList[activeStoryIndex].productId;
+                        const storyListing = listings.find(l => l.id === pid);
                         setStoryViewerVisible(false);
-                        router.push(`/product/${pid}`);
+                        if (storyListing) {
+                          router.push(getListingSeoUrl(storyListing));
+                        } else {
+                          router.push(`/product/${pid}`);
+                        }
                       }}
                     >
                       <Text style={styles.storyViewerBtnText}>ÜRÜNE GİT</Text>
@@ -3602,11 +4522,27 @@ export default function HomeScreen() {
                         padding: 12,
                         borderBottomWidth: 1,
                         borderBottomColor: theme.backgroundSelected,
-                        backgroundColor: notif.isRead ? 'transparent' : 'rgba(255, 107, 0, 0.08)',
+                        backgroundColor: notif.isRead ? 'transparent' : 'rgba(9, 105, 218, 0.08)',
                         borderRadius: 8,
                         marginBottom: 8
                       }}
-                      onPress={() => markNotificationAsRead(notif.id)}
+                      onPress={() => {
+                        markNotificationAsRead(notif.id);
+                        if (notif.type === 'cart') {
+                          setNotificationModalVisible(false);
+                          setCheckoutStep('cart');
+                          setCartModalVisible(true);
+                        } else if (notif.type === 'product' && (notif as any).productId) {
+                          const pid = (notif as any).productId;
+                          const notifListing = listings.find(l => l.id === pid);
+                          setNotificationModalVisible(false);
+                          if (notifListing) {
+                            router.push(getListingSeoUrl(notifListing) as any);
+                          } else {
+                            router.push(`/product/${pid}` as any);
+                          }
+                        }
+                      }}
                     >
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                         <ThemedText style={{ fontSize: 14, fontWeight: 'bold', color: notif.isRead ? theme.text : theme.gold }}>
@@ -3683,7 +4619,7 @@ export default function HomeScreen() {
                         paddingVertical: 12,
                         paddingHorizontal: 16,
                         borderRadius: 8,
-                        backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                        backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.12)' : 'transparent',
                         flexDirection: 'row',
                         justifyContent: 'space-between',
                         alignItems: 'center',
@@ -3744,7 +4680,7 @@ export default function HomeScreen() {
                         paddingVertical: 12,
                         paddingHorizontal: 16,
                         borderRadius: 8,
-                        backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                        backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.12)' : 'transparent',
                         flexDirection: 'row',
                         justifyContent: 'space-between',
                         alignItems: 'center',
@@ -3814,7 +4750,7 @@ export default function HomeScreen() {
                             paddingVertical: 10,
                             paddingHorizontal: 12,
                             borderRadius: 8,
-                            backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.12)' : 'transparent',
+                            backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.12)' : 'transparent',
                             flexDirection: 'row',
                             alignItems: 'center',
                             gap: 10,
@@ -4015,7 +4951,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     zIndex: 1,
   },
   searchBarContainer: {
@@ -4095,7 +5031,7 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 6,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
@@ -4107,9 +5043,9 @@ const styles = StyleSheet.create({
   adminBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 85, 0, 0.08)',
+    backgroundColor: 'rgba(9, 105, 218, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 85, 0, 0.2)',
+    borderColor: 'rgba(9, 105, 218, 0.2)',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 6,
@@ -4120,12 +5056,12 @@ const styles = StyleSheet.create({
   },
   adminBarText: {
     fontSize: 12,
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     flex: 1,
   },
   adminPublishBtn: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 4,
@@ -4190,15 +5126,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   subCategoryBadgeSelected: {
-    backgroundColor: 'rgba(255, 85, 0, 0.12)',
-    borderColor: '#FF5500',
+    backgroundColor: 'rgba(9, 105, 218, 0.12)',
+    borderColor: '#0969da',
   },
   subCategoryBadgeText: {
     fontSize: 12,
     fontWeight: '600',
   },
   subCategoryBadgeTextSelected: {
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: '700',
   },
   sectionTitle: {
@@ -4243,7 +5179,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
   },
   gridTitle: {
     fontSize: 11,
@@ -4265,17 +5201,89 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   clearSearchBtn: {
-    backgroundColor: 'rgba(255, 85, 0, 0.1)',
+    backgroundColor: 'rgba(9, 105, 218, 0.1)',
     borderWidth: 1,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 6,
   },
   clearSearchBtnText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     fontSize: 12,
+  },
+  desktopGrid: {
+    display: 'grid' as any,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' as any,
+    gap: 16,
+    width: '100%',
+    paddingVertical: 8,
+  },
+  desktopReelCard: {
+    width: '100%',
+    height: 380,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+    boxShadow: '0px 4px 12px rgba(0,0,0,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  desktopReelCardImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  desktopReelsBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  desktopReelTypeBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  desktopReelTypeBadgeText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  desktopReelCardFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  desktopReelCardTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  desktopReelCardPrice: {
+    color: '#38BDF8',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 4,
   },
   masonryGrid: {
     flexDirection: 'row',
@@ -4339,7 +5347,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   collageCardPrice: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 9,
     fontWeight: 'bold',
     marginTop: 1,
@@ -4409,11 +5417,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: 'rgba(255, 85, 0, 0.3)',
+    borderColor: 'rgba(9, 105, 218, 0.3)',
     zIndex: 10,
   },
   timerText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 13,
     fontWeight: 'bold',
   },
@@ -4436,7 +5444,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   gavelButton: {
-    borderColor: 'rgba(255, 85, 0, 0.4)',
+    borderColor: 'rgba(9, 105, 218, 0.4)',
     backgroundColor: 'rgba(7, 12, 25, 0.8)',
   },
   iconLabel: {
@@ -4456,7 +5464,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 8,
     borderTopRightRadius: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 85, 0, 0.1)',
+    borderTopColor: 'rgba(9, 105, 218, 0.1)',
     zIndex: 9,
   },
   sellerRow: {
@@ -4470,7 +5478,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 4,
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
   },
   sellerName: {
     color: '#F8FAFC',
@@ -4486,7 +5494,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingVertical: 3,
     paddingHorizontal: 8,
     borderRadius: 4,
@@ -4518,14 +5526,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   priceValue: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 18,
     fontWeight: '900',
   },
   ctaButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 6,
@@ -4539,16 +5547,16 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   modalContent: {
     width: '100%',
     maxWidth: 500,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderRadius: 12,
     padding: 24,
-    borderTopWidth: 1,
+    borderWidth: 1,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -4590,12 +5598,12 @@ const styles = StyleSheet.create({
   currencySuffix: {
     position: 'absolute',
     right: 16,
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     fontSize: 15,
   },
   submitButton: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     height: 48,
     borderRadius: 6,
     justifyContent: 'center',
@@ -4635,14 +5643,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(7, 12, 25, 0.95)',
     borderWidth: 1,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 6,
     zIndex: 9999,
   },
   toastText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     fontSize: 12,
   },
@@ -4720,7 +5728,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     height: 48,
     borderRadius: 6,
     gap: 6,
@@ -4778,7 +5786,7 @@ const styles = StyleSheet.create({
   formNextBtn: {
     flex: 2,
     height: 46,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     borderRadius: 6,
     justifyContent: 'center',
     alignItems: 'center',
@@ -4792,7 +5800,7 @@ const styles = StyleSheet.create({
     height: 150,
     backgroundColor: '#18181B',
     borderWidth: 1,
-    borderColor: 'rgba(255, 85, 0, 0.25)',
+    borderColor: 'rgba(9, 105, 218, 0.25)',
     borderRadius: 8,
     padding: 16,
     justifyContent: 'space-between',
@@ -4841,9 +5849,9 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: 'rgba(255, 85, 0, 0.08)',
+    backgroundColor: 'rgba(9, 105, 218, 0.08)',
     borderWidth: 2,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20,
@@ -4871,7 +5879,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   successContinueBtn: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     height: 46,
     width: '100%',
     borderRadius: 6,
@@ -4885,20 +5893,20 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   sellerHeaderBtn: {
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     borderWidth: 1,
     paddingVertical: 5,
     paddingHorizontal: 10,
     borderRadius: 6,
-    backgroundColor: 'rgba(255, 85, 0, 0.08)',
+    backgroundColor: 'rgba(9, 105, 218, 0.08)',
   },
   sellerHeaderBtnText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontSize: 11,
     fontWeight: 'bold',
   },
   sellerHeaderBadge: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingVertical: 5,
     paddingHorizontal: 10,
     borderRadius: 6,
@@ -4935,7 +5943,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#18181B',
     borderWidth: 1.5,
-    borderColor: 'rgba(255, 85, 0, 0.3)',
+    borderColor: 'rgba(9, 105, 218, 0.3)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4953,13 +5961,13 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 2,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
   },
   cartAnimSuccessCircle: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
@@ -5005,15 +6013,15 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   reelsResetButton: {
-    backgroundColor: 'rgba(255, 85, 0, 0.1)',
+    backgroundColor: 'rgba(9, 105, 218, 0.1)',
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     paddingVertical: 10,
     paddingHorizontal: 20,
     borderRadius: 6,
   },
   reelsResetButtonText: {
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     fontSize: 13,
   },
@@ -5303,7 +6311,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     height: 38,
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
   },
   reelsAddToCartBtnText: {
     color: '#FFFFFF',

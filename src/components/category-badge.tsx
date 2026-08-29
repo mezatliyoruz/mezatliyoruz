@@ -47,7 +47,7 @@ export default function CategoryBadge({ item, style, textStyle }: { item: Listin
 
 const styles = StyleSheet.create({
   badge: {
-    backgroundColor: 'rgba(255, 85, 0, 0.9)',
+    backgroundColor: 'rgba(9, 105, 218, 0.9)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,

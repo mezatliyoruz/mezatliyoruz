@@ -2,15 +2,36 @@ import { create } from 'zustand';
 import * as Notifications from 'expo-notifications';
 import { Platform, Alert } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export interface Bid {
+  id: string;
+  bidderId: string;
+  bidderName: string;
+  bidderAvatar: string;
+  amount: number;
+  timestamp: number;
+}
+
+export interface AutoBid {
+  bidderId: string;
+  bidderName: string;
+  bidderAvatar: string;
+  maxAmount: number;
+  createdAt: number;
+}
 
 export interface Listing {
   id: string;
+  listingNumber?: string;
   title: string;
   description: string;
   sellerName: string;
+  sellerId?: string;
   sellerAvatar: string;
   sellerTrustScore: number;
   sellerVerified: boolean;
+  sellerPhone?: string;
   price: number;
   type: 'fixed' | 'offer' | 'auction' | 'rent';
   rentPeriod?: string;
@@ -19,6 +40,7 @@ export interface Listing {
   verifiedProduct: boolean;
   documentUrl?: string;
   timeLeft?: number; // seconds
+  endTime?: number;
   bidsCount?: number;
   reservePrice?: number;
   favoritesCount: number;
@@ -35,13 +57,28 @@ export interface Listing {
   neighborhood?: string;
   isRealEstate?: boolean;
   isVehicle?: boolean;
-  status?: 'active' | 'pending_approval' | 'rejected';
+  status?: 'active' | 'pending_approval' | 'rejected' | 'suspended';
+  stock?: number;
+  rejectionReason?: string;
   latitude?: number;
   longitude?: number;
   km?: number;
   transmission?: 'Manuel' | 'Otomatik';
   sqm?: number;
   rooms?: string;
+  minIncrement?: number;
+  lastBidderId?: string;
+  lastBidderName?: string;
+  lastBidderAvatar?: string;
+  bids?: Bid[];
+  autoBids?: AutoBid[];
+  auctionStatus?: 'active' | 'won' | 'purchased' | 'expired';
+  auctionWonAt?: number;
+  auctionPaymentDeadline?: number;
+  auctionWinnerId?: string;
+  auctionWinnerName?: string;
+  auctionWinnerAvatar?: string;
+  lastReminderSentAt?: number;
 }
 
 export interface Review {
@@ -102,6 +139,12 @@ export interface Order {
   status: 'pending' | 'processing' | 'shipped' | 'completed';
   trackingNumber?: string;
   createdAt: string;
+  shippingCompany?: string;
+  shippingFee?: number;
+  cargoBarcodeUrl?: string;
+  senderAddress?: string;
+  senderPhone?: string;
+  senderName?: string;
 }
 
 export interface CartItem {
@@ -120,8 +163,18 @@ export interface RentACarApplication {
   ruhsat: string;
   imzaSirkuleri: string;
   status: 'pending' | 'approved' | 'rejected';
+  adminNote?: string;
   createdAt: string;
   relatedListingId?: string;
+}
+
+export interface ModeratorPermissions {
+  canModerateListings: boolean;
+  canApproveFirms: boolean;
+  canManageAds: boolean;
+  canManageIssues: boolean;
+  canManageCMS: boolean;
+  isSuperAdmin: boolean;
 }
 
 export interface UserProfile {
@@ -129,12 +182,24 @@ export interface UserProfile {
   name: string;
   avatar: string;
   phone: string;
-  role: 'user' | 'super_admin' | 'customer' | 'seller';
+  role: 'user' | 'super_admin' | 'customer' | 'seller' | 'moderator';
   trustScore: number;
   verified: boolean;
   shopName?: string;
   isRentACarApproved?: boolean;
   rentACarApplicationStatus?: 'none' | 'pending' | 'approved' | 'rejected';
+  liveAuctionBanUntil?: number;
+  moderatorPermissions?: ModeratorPermissions;
+}
+
+export interface SavedAddress {
+  id: string;
+  name: string; // e.g. "Ev", "İş"
+  receiverName: string;
+  receiverPhone: string;
+  city: string;
+  district: string;
+  address: string;
 }
 
 export interface Notification {
@@ -144,9 +209,60 @@ export interface Notification {
   message: string;
   createdAt: string;
   isRead: boolean;
+  type?: 'cart' | 'chat' | 'system' | 'product';
+}
+
+export interface Ad {
+  id: string;
+  userId: string;
+  userName: string;
+  listingId: string;
+  title?: string;
+  description?: string;
+  videoUrl: string;
+  targetUrl?: string;
+  durationType: '1day' | '3days' | '1week' | '1month';
+  startDate: number;
+  endDate: number;
+  status: 'active' | 'pending' | 'expired';
+}
+
+export interface CustomerIssue {
+  id: string;
+  orderId: string;
+  buyerId: string;
+  buyerName: string;
+  sellerName: string;
+  issueType: 'originality' | 'damaged' | 'different_product' | 'not_delivered' | 'other';
+  description: string;
+  status: 'pending' | 'resolved' | 'investigating' | 'refunded' | 'rejected';
+  createdAt: string;
+  adminNotes?: string;
+}
+
+export interface AdPriceConfig {
+  price: number;
+  enabled: boolean;
+}
+
+export interface AdPricing {
+  '1day': AdPriceConfig;
+  '3days': AdPriceConfig;
+  '1week': AdPriceConfig;
+  '1month': AdPriceConfig;
 }
 
 interface StoreState {
+  ads: Ad[];
+  adPricing: AdPricing;
+  cmsLoaded: boolean;
+  createAd: (ad: Omit<Ad, 'id' | 'startDate' | 'endDate' | 'status'>) => void;
+  updateAdPricing: (pricing: AdPricing) => void;
+  approveAd: (adId: string) => void;
+  rejectAd: (adId: string) => void;
+  updateAd: (adId: string, updatedFields: Partial<Ad>) => void;
+  deleteAd: (adId: string) => void;
+  toggleAdDurationOption: (durationType: '1day' | '3days' | '1week' | '1month', enabled: boolean) => void;
   currentUser: UserProfile | null;
   accounts: {
     [phone: string]: {
@@ -154,17 +270,20 @@ interface StoreState {
       super_admin?: UserProfile;
       customer?: UserProfile;
       seller?: UserProfile;
+      moderator?: UserProfile;
     };
   };
-  registerAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller', name: string, shopName?: string) => void;
-  loginAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller') => boolean;
+  registerAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller' | 'moderator', name: string, shopName?: string) => void;
+  loginAccount: (phone: string, role: 'user' | 'super_admin' | 'customer' | 'seller' | 'moderator') => boolean;
+  assignModerator: (phone: string, permissions: ModeratorPermissions) => void;
+  removeModerator: (phone: string) => void;
   logoutAccount: () => void;
   updateProfileAvatar: (avatarUri: string) => void;
   listings: Listing[];
   rentACarApplications: RentACarApplication[];
   applyForRentACar: (app: Omit<RentACarApplication, 'id' | 'status' | 'createdAt'>) => void;
-  approveRentACarApplication: (appId: string) => void;
-  rejectRentACarApplication: (appId: string) => void;
+  approveRentACarApplication: (appId: string, note?: string) => void;
+  rejectRentACarApplication: (appId: string, note?: string) => void;
   chats: Chat[];
   activeChatId: string | null;
   stories: Story[];
@@ -184,13 +303,17 @@ interface StoreState {
   // Actions
   toggleLike: (listingId: string) => void;
   toggleFavorite: (listingId: string) => void;
-  placeBid: (listingId: string, amount: number) => { success: boolean; error?: string };
+  placeBid: (listingId: string, amount: number, customBidder?: { id: string; name: string; avatar: string }) => { success: boolean; error?: string };
+  setAutoBidLimit: (listingId: string, maxAmount: number) => { success: boolean; error?: string };
+  cancelAutoBidLimit: (listingId: string) => { success: boolean; error?: string };
   sendInChatOffer: (chatId: string, amount: number) => void;
   respondToOffer: (chatId: string, messageId: string, response: 'accepted' | 'rejected', counterAmount?: number) => void;
   sendMessage: (chatId: string, text: string, type?: Message['type'], mediaUrl?: string, fileName?: string) => void;
-  createChat: (listingId: string, fromSellerProfile?: boolean) => string;
+  createChat: (listingId: string, fromSellerProfile?: boolean, targetUser?: UserProfile) => string;
   decrementTimers: () => void;
   addListing: (listing: Omit<Listing, 'id' | 'liked' | 'favorited' | 'favoritesCount'>) => void;
+  deleteListing: (listingId: string) => void;
+  updateListing: (listingId: string, updatedFields: Partial<Listing>) => void;
   
   // Cart State & Actions
   cart: CartItem[];
@@ -215,6 +338,11 @@ interface StoreState {
   orders: Order[];
   addOrder: (order: Omit<Order, 'id' | 'createdAt' | 'status'>) => string;
   updateOrderStatus: (orderId: string, status: Order['status'], trackingNumber?: string) => void;
+
+  // Customer Issues State & Actions
+  customerIssues: CustomerIssue[];
+  reportIssue: (issue: Omit<CustomerIssue, 'id' | 'status' | 'createdAt'>) => void;
+  updateIssueStatus: (issueId: string, status: CustomerIssue['status'], adminNotes?: string) => void;
 
   // Notification State & Actions
   notifications: Notification[];
@@ -242,6 +370,9 @@ interface StoreState {
   savedCards: { id: string; token: string; cardSummary: string; cardHolder: string }[];
   addSavedCard: (card: { token: string; cardSummary: string; cardHolder: string }) => void;
   deleteSavedCard: (id: string) => void;
+  savedAddresses: SavedAddress[];
+  addSavedAddress: (address: Omit<SavedAddress, 'id'>) => void;
+  deleteSavedAddress: (id: string) => void;
   reviews: Review[];
   addReview: (review: Omit<Review, 'id' | 'createdAt'>) => void;
   compareList: Listing[];
@@ -253,6 +384,8 @@ interface StoreState {
 
 export interface CollageBox {
   images: string[];
+  imagesWeb?: string[];
+  imagesMobile?: string[];
   link: string;
   titles?: string[];
   links?: string[];
@@ -373,6 +506,7 @@ const initialListings: Listing[] = [
     type: 'auction',
     timeLeft: 600, // 10 dakika
     bidsCount: 5,
+    minIncrement: 50,
     reservePrice: 4000,
     videoUrl: localVideos.video_3,
     photos: [localImages.v3_f1, localImages.v3_f2, localImages.v3_f3],
@@ -384,6 +518,16 @@ const initialListings: Listing[] = [
     category: 'El Emeği & Sanat',
     condition: 'Kusursuz',
     city: 'Ankara',
+    lastBidderId: 'bot_kemal_yilmaz',
+    lastBidderName: 'Kemal Yılmaz',
+    lastBidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+    bids: [
+      { id: 'b3_1', bidderId: 'bot_kemal_yilmaz', bidderName: 'Kemal Yılmaz', bidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', amount: 3500, timestamp: Date.now() - 30000 },
+      { id: 'b3_2', bidderId: 'bot_ayse_demir', bidderName: 'Ayşe Demir', bidderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', amount: 3450, timestamp: Date.now() - 90000 },
+      { id: 'b3_3', bidderId: 'bot_murat_kaya', bidderName: 'Murat Kaya', bidderAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150', amount: 3400, timestamp: Date.now() - 150000 },
+      { id: 'b3_4', bidderId: 'bot_selin_aksoy', bidderName: 'Selin Aksoy', bidderAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150', amount: 3350, timestamp: Date.now() - 210000 },
+      { id: 'b3_5', bidderId: 'bot_can_yildiz', bidderName: 'Can Yıldız', bidderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', amount: 3300, timestamp: Date.now() - 270000 }
+    ]
   },
   {
     id: '4',
@@ -438,6 +582,7 @@ const initialListings: Listing[] = [
     type: 'auction',
     timeLeft: 110, // 1 dakika 50 saniye (anti-sniping testi için!)
     bidsCount: 14,
+    minIncrement: 20,
     reservePrice: 1300,
     videoUrl: localVideos.video_6,
     photos: [localImages.v6_f1, localImages.v6_f2, localImages.v6_f3],
@@ -448,6 +593,16 @@ const initialListings: Listing[] = [
     category: 'Ev & Yaşam',
     condition: 'Çok İyi',
     city: 'İstanbul',
+    lastBidderId: 'bot_murat_kaya',
+    lastBidderName: 'Murat Kaya',
+    lastBidderAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150',
+    bids: [
+      { id: 'b6_1', bidderId: 'bot_murat_kaya', bidderName: 'Murat Kaya', bidderAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150', amount: 1100, timestamp: Date.now() - 15000 },
+      { id: 'b6_2', bidderId: 'bot_kemal_yilmaz', bidderName: 'Kemal Yılmaz', bidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', amount: 1080, timestamp: Date.now() - 45000 },
+      { id: 'b6_3', bidderId: 'bot_ayse_demir', bidderName: 'Ayşe Demir', bidderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', amount: 1060, timestamp: Date.now() - 105000 },
+      { id: 'b6_4', bidderId: 'bot_selin_aksoy', bidderName: 'Selin Aksoy', bidderAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150', amount: 1040, timestamp: Date.now() - 165000 },
+      { id: 'b6_5', bidderId: 'bot_can_yildiz', bidderName: 'Can Yıldız', bidderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', amount: 1020, timestamp: Date.now() - 225000 }
+    ]
   },
   {
     id: '7',
@@ -461,6 +616,7 @@ const initialListings: Listing[] = [
     type: 'auction',
     timeLeft: 3600,
     bidsCount: 4,
+    minIncrement: 100,
     videoUrl: localVideos.video_3,
     photos: [localImages.v3_f1, localImages.v3_f2, localImages.v3_f3],
     verifiedProduct: true,
@@ -471,6 +627,15 @@ const initialListings: Listing[] = [
     category: 'Antika & Koleksiyon',
     condition: 'Yeni Gibi',
     city: 'Ankara',
+    lastBidderId: 'bot_can_yildiz',
+    lastBidderName: 'Can Yıldız',
+    lastBidderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
+    bids: [
+      { id: 'b7_1', bidderId: 'bot_can_yildiz', bidderName: 'Can Yıldız', bidderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', amount: 4500, timestamp: Date.now() - 40000 },
+      { id: 'b7_2', bidderId: 'bot_kemal_yilmaz', bidderName: 'Kemal Yılmaz', bidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', amount: 4400, timestamp: Date.now() - 100000 },
+      { id: 'b7_3', bidderId: 'bot_ayse_demir', bidderName: 'Ayşe Demir', bidderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', amount: 4300, timestamp: Date.now() - 180000 },
+      { id: 'b7_4', bidderId: 'bot_murat_kaya', bidderName: 'Murat Kaya', bidderAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150', amount: 4200, timestamp: Date.now() - 240000 }
+    ]
   },
   {
     id: '8',
@@ -542,9 +707,7 @@ const initialListings: Listing[] = [
     sellerTrustScore: 9.8,
     sellerVerified: true,
     price: 2850000,
-    type: 'auction',
-    timeLeft: 80893,
-    bidsCount: 18,
+    type: 'fixed',
     videoUrl: localVideos.video_1,
     photos: [localImages.v1_f1, localImages.v1_f2, localImages.v1_f3],
     verifiedProduct: true,
@@ -566,9 +729,7 @@ const initialListings: Listing[] = [
     sellerTrustScore: 9.9,
     sellerVerified: true,
     price: 8750000,
-    type: 'auction',
-    timeLeft: 120930,
-    bidsCount: 7,
+    type: 'fixed',
     videoUrl: localVideos.video_2,
     photos: [localImages.v2_f1, localImages.v2_f2, localImages.v2_f3],
     verifiedProduct: true,
@@ -593,6 +754,7 @@ const initialListings: Listing[] = [
     type: 'auction',
     timeLeft: 3600,
     bidsCount: 14,
+    minIncrement: 1000,
     videoUrl: localVideos.video_3,
     photos: [localImages.v3_f1, localImages.v3_f2, localImages.v3_f3],
     verifiedProduct: true,
@@ -603,6 +765,16 @@ const initialListings: Listing[] = [
     category: 'Antika & Koleksiyon',
     condition: 'Kusursuz',
     city: 'İstanbul',
+    lastBidderId: 'bot_kemal_yilmaz',
+    lastBidderName: 'Kemal Yılmaz',
+    lastBidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+    bids: [
+      { id: 'b13_1', bidderId: 'bot_kemal_yilmaz', bidderName: 'Kemal Yılmaz', bidderAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', amount: 625000, timestamp: Date.now() - 40000 },
+      { id: 'b13_2', bidderId: 'bot_ayse_demir', bidderName: 'Ayşe Demir', bidderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', amount: 624000, timestamp: Date.now() - 100000 },
+      { id: 'b13_3', bidderId: 'bot_murat_kaya', bidderName: 'Murat Kaya', bidderAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150', amount: 623000, timestamp: Date.now() - 160000 },
+      { id: 'b13_4', bidderId: 'bot_selin_aksoy', bidderName: 'Selin Aksoy', bidderAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150', amount: 622000, timestamp: Date.now() - 220000 },
+      { id: 'b13_5', bidderId: 'bot_can_yildiz', bidderName: 'Can Yıldız', bidderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', amount: 621000, timestamp: Date.now() - 280000 }
+    ]
   },
   {
     id: '14',
@@ -820,18 +992,28 @@ const initialChats: Chat[] = [
 export const defaultCollage: HomeCollage = {
   leftVertical: {
     images: [
-      require('../../assets/images/banner_live_auction.png'),
-      require('../../assets/images/banner_flea_market.png'),
-      require('../../assets/images/banner_producer.png')
+      'https://images.unsplash.com/photo-1573164713988-8665fc963095?w=800',
+      'https://images.unsplash.com/photo-1533900298318-6b8da08a523e?w=800',
+      'https://images.unsplash.com/photo-1542838132-92c53300491e?w=800'
+    ],
+    imagesWeb: [
+      'https://images.unsplash.com/photo-1573164713988-8665fc963095?w=800',
+      'https://images.unsplash.com/photo-1533900298318-6b8da08a523e?w=800',
+      'https://images.unsplash.com/photo-1542838132-92c53300491e?w=800'
+    ],
+    imagesMobile: [
+      'https://images.unsplash.com/photo-1573164713988-8665fc963095?w=800',
+      'https://images.unsplash.com/photo-1533900298318-6b8da08a523e?w=800',
+      'https://images.unsplash.com/photo-1542838132-92c53300491e?w=800'
     ],
     titles: [
       'Canlı Mezatlar',
       'Bit Pazarı',
       'Üreticiden Tüketiciye'
     ],
-    link: '/featured-auction',
+    link: '/auctions',
     links: [
-      '/featured-auction',
+      '/auctions',
       'bit_pazari',
       'Üreticiden Tüketiciye'
     ],
@@ -845,6 +1027,12 @@ export const defaultCollage: HomeCollage = {
     images: [
       'https://images.unsplash.com/photo-1603006905003-be475563bc59?w=800'
     ],
+    imagesWeb: [
+      'https://images.unsplash.com/photo-1603006905003-be475563bc59?w=800'
+    ],
+    imagesMobile: [
+      'https://images.unsplash.com/photo-1603006905003-be475563bc59?w=800'
+    ],
     titles: [
       'Antikalar Bit Pazarında'
     ],
@@ -852,12 +1040,18 @@ export const defaultCollage: HomeCollage = {
   },
   rightBottom: {
     images: [
-      'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=800'
+      'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=800'
+    ],
+    imagesWeb: [
+      'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=800'
+    ],
+    imagesMobile: [
+      'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=800'
     ],
     titles: [
-      'Araba mezatını kaçırmayın!'
+      'Reklam Verin'
     ],
-    link: '/featured-auction'
+    link: '/profile?openAdModal=true'
   }
 };
 
@@ -907,80 +1101,181 @@ const defaultFeaturedAuction: FeaturedAuctionState = {
   ]
 };
 
+function processAutoBids(listing: Listing): Listing {
+  let currentListing = { ...listing };
+  let bids = [...(currentListing.bids || [])];
+  let price = currentListing.price;
+  let bidsCount = currentListing.bidsCount || 0;
+  let timeLeft = currentListing.timeLeft;
+  let lastBidderId = currentListing.lastBidderId;
+  let lastBidderName = currentListing.lastBidderName;
+  let lastBidderAvatar = currentListing.lastBidderAvatar;
+  
+  const minIncrement = currentListing.minIncrement !== undefined ? currentListing.minIncrement : 10;
+  
+  let bidPlacedInLoop = true;
+  while (bidPlacedInLoop) {
+    bidPlacedInLoop = false;
+    
+    // Sort auto-bids by when they were created (oldest first, i.e., button pressed first)
+    const autoBids = [...(currentListing.autoBids || [])].sort((a, b) => a.createdAt - b.createdAt);
+    
+    // Find the next eligible auto-bidder
+    // Eligible means:
+    // 1. Not the current highest bidder (lastBidderId !== autoBid.bidderId)
+    // 2. Can afford the next bid (autoBid.maxAmount >= price + minIncrement)
+    const nextEligible = autoBids.find(ab => 
+      ab.bidderId !== lastBidderId && 
+      ab.maxAmount >= price + minIncrement
+    );
+    
+    if (nextEligible) {
+      // Place bid for this auto-bidder
+      const bidAmount = price + minIncrement;
+      price = bidAmount;
+      bidsCount += 1;
+      
+      // Anti-sniping rule
+      if (timeLeft !== undefined && timeLeft < 120) {
+        timeLeft += 120;
+      }
+      
+      lastBidderId = nextEligible.bidderId;
+      lastBidderName = nextEligible.bidderName;
+      lastBidderAvatar = nextEligible.bidderAvatar;
+      
+      const newBid: Bid = {
+        id: `bid_auto_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        bidderId: lastBidderId,
+        bidderName: lastBidderName,
+        bidderAvatar: lastBidderAvatar,
+        amount: bidAmount,
+        timestamp: Date.now(),
+      };
+      
+      bids = [newBid, ...bids];
+      
+      // Update current listing properties for the next iteration of the loop
+      currentListing.price = price;
+      currentListing.bidsCount = bidsCount;
+      currentListing.timeLeft = timeLeft;
+      currentListing.lastBidderId = lastBidderId;
+      currentListing.lastBidderName = lastBidderName;
+      currentListing.lastBidderAvatar = lastBidderAvatar;
+      currentListing.bids = bids;
+      
+      bidPlacedInLoop = true;
+    }
+  }
+  
+  return currentListing;
+}
+
+const cleanUndefinedFields = (obj: any): any => {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefinedFields);
+  }
+  if (typeof obj === 'object') {
+    const cleaned: any = {};
+    for (const key in obj) {
+      if (obj[key] !== undefined) {
+        cleaned[key] = cleanUndefinedFields(obj[key]);
+      }
+    }
+    return cleaned;
+  }
+  return obj;
+};
+
+const saveListingToFirestore = async (listing: Listing) => {
+  try {
+    const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+    const { app } = await import('./firebase');
+    const db = getFirestore(app);
+    const cleaned = cleanUndefinedFields(listing);
+    await setDoc(doc(db, 'listings', listing.id), cleaned);
+  } catch (e) {
+    console.warn('Failed to save listing to Firestore:', e);
+  }
+};
+
+const saveListingsToLocal = async (listings: Listing[]) => {
+  try {
+    await AsyncStorage.setItem('mezatliyoruz_local_listings', JSON.stringify(listings));
+  } catch (err) {
+    console.warn('LocalStorage save error:', err);
+  }
+};
+
 let wsBidInterval: any = null;
 
 export const useAppStore = create<StoreState>((set, get) => ({
-  currentUser: {
-    id: 'customer_1',
-    name: 'Himmet Akar',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-    phone: '5555555555',
-    role: 'customer',
-    trustScore: 9.8,
-    verified: true,
-  },
+  currentUser: null,
   accounts: {
-    '5555555555': {
-      customer: {
-        id: 'customer_1',
+    '5455798600': {
+      user: {
+        id: 'user_himmet',
         name: 'Himmet Akar',
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        phone: '5555555555',
+        phone: '5455798600',
+        role: 'user',
+        trustScore: 9.8,
+        verified: true,
+        isRentACarApproved: true,
+        rentACarApplicationStatus: 'approved',
+      },
+      customer: {
+        id: 'customer_himmet',
+        name: 'Himmet Akar',
+        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+        phone: '5455798600',
         role: 'customer',
         trustScore: 9.8,
         verified: true,
+        isRentACarApproved: true,
+        rentACarApplicationStatus: 'approved',
       },
       seller: {
-        id: 'seller_1',
-        name: 'Himmet Akar (Satıcı)',
+        id: 'user_himmet',
+        name: 'Himmet Akar',
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        phone: '5555555555',
+        phone: '5455798600',
         role: 'seller',
         trustScore: 9.9,
         verified: true,
         shopName: 'Akar Antika',
+        isRentACarApproved: true,
+        rentACarApplicationStatus: 'approved',
       }
     },
-    '5555555557': {
+    '5327261026': {
+      user: {
+        id: 'user_oguz',
+        name: 'Oğuz İbrahim Sarsmaz (Yönetici)',
+        avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+        phone: '5327261026',
+        role: 'user',
+        trustScore: 10.0,
+        verified: true,
+      },
       customer: {
-        id: 'customer_2',
-        name: 'Himmet Akar',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        phone: '5555555557',
+        id: 'customer_oguz',
+        name: 'Oğuz İbrahim Sarsmaz (Yönetici)',
+        avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+        phone: '5327261026',
         role: 'customer',
-        trustScore: 9.8,
+        trustScore: 10.0,
         verified: true,
       },
       super_admin: {
-        id: 'super_admin_1',
-        name: 'Himmet Akar (Süper Admin)',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        phone: '5555555557',
+        id: 'super_admin_oguz',
+        name: 'Oğuz İbrahim Sarsmaz (Yönetici)',
+        avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+        phone: '5327261026',
         role: 'super_admin',
         trustScore: 10.0,
         verified: true,
-      }
-    },
-    '5555555559': {
-      customer: {
-        id: 'customer_3',
-        name: 'Mega Kurumsal Yetkilisi',
-        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150',
-        phone: '5555555559',
-        role: 'customer',
-        trustScore: 10.0,
-        verified: true,
-      },
-      seller: {
-        id: 'seller_3',
-        name: 'Mega Kurumsal Yetkilisi',
-        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150',
-        phone: '5555555559',
-        role: 'seller',
-        trustScore: 10.0,
-        verified: true,
-        shopName: 'Mega Holding A.Ş.',
-        isRentACarApproved: true,
       }
     }
   },
@@ -990,65 +1285,142 @@ export const useAppStore = create<StoreState>((set, get) => ({
   liveFeaturedAuction: defaultFeaturedAuction,
   draftFeaturedAuction: defaultFeaturedAuction,
   orders: [],
+  customerIssues: [],
+  ads: [],
+  cmsLoaded: false,
+  adPricing: {
+    '1day': { price: 0, enabled: true },
+    '3days': { price: 0, enabled: true },
+    '1week': { price: 0, enabled: true },
+    '1month': { price: 0, enabled: true },
+  },
 
 
   updateDraftCollage: (collage) => {
-    set({ draftCollage: collage });
-    try {
-      const { doc, setDoc } = require('firebase/firestore');
-      const { db } = require('./firebase');
-      setDoc(doc(db, 'cms', 'home_collage'), { draft: collage }, { merge: true });
-    } catch (e) {
-      console.warn('Failed to sync draft collage with Firebase:', e);
-    }
+    set({ draftCollage: collage, liveCollage: collage });
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'home_collage'), { draft: collage, live: collage }, { merge: true });
+      } catch (e: any) {
+        console.warn('Failed to sync collage with Firebase:', e);
+        Alert.alert('Taslak Kaydedilemedi', `Değişiklikler sunucuya senkronize edilemedi: ${e.message || e}`);
+      }
+    })();
   },
 
   publishCollage: () => {
     const draft = get().draftCollage;
     set({ liveCollage: draft });
-    try {
-      const { doc, setDoc } = require('firebase/firestore');
-      const { db } = require('./firebase');
-      setDoc(doc(db, 'cms', 'home_collage'), { live: draft, draft: draft }, { merge: true });
-    } catch (e) {
-      console.warn('Failed to publish collage to Firebase:', e);
-    }
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'home_collage'), { live: draft, draft: draft }, { merge: true });
+      } catch (e: any) {
+        console.warn('Failed to publish collage to Firebase:', e);
+        Alert.alert('Slaytlar Yayınlanamadı', `Canlıya aktarma başarısız oldu: ${e.message || e}`);
+      }
+    })();
   },
 
   updateDraftFeaturedAuction: (auction) => {
-    set({ draftFeaturedAuction: auction });
-    try {
-      const { doc, setDoc } = require('firebase/firestore');
-      const { db } = require('./firebase');
-      setDoc(doc(db, 'cms', 'featured_auction'), { draft: auction }, { merge: true });
-    } catch (e) {
-      console.warn('Failed to sync draft auction with Firebase:', e);
-    }
+    set({ draftFeaturedAuction: auction, liveFeaturedAuction: auction });
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'featured_auction'), { draft: auction, live: auction }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to sync draft auction with Firebase:', e);
+      }
+    })();
   },
 
   publishFeaturedAuction: () => {
     const draft = get().draftFeaturedAuction;
     set({ liveFeaturedAuction: draft });
-    try {
-      const { doc, setDoc } = require('firebase/firestore');
-      const { db } = require('./firebase');
-      setDoc(doc(db, 'cms', 'featured_auction'), { live: draft, draft: draft }, { merge: true });
-    } catch (e) {
-      console.warn('Failed to publish auction to Firebase:', e);
-    }
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'featured_auction'), { live: draft, draft: draft }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to publish auction to Firebase:', e);
+      }
+    })();
   },
 
   loadCMSData: async () => {
+    // 1. Try to load local listings first (so we instantly show new ones on refresh)
     try {
-      const { doc, getDoc, getFirestore } = await import('firebase/firestore');
+      const localListingsStr = await AsyncStorage.getItem('mezatliyoruz_local_listings');
+      if (localListingsStr) {
+        const parsed = JSON.parse(localListingsStr);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Transfer all listings to Himmet Akar
+          const sanitized = parsed.map(l => ({
+            ...l,
+            sellerName: 'Himmet Akar',
+            sellerAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+            sellerTrustScore: 9.9,
+            sellerVerified: true,
+            sellerId: 'user_himmet'
+          }));
+          set({ listings: sanitized });
+          console.log(`[DEBUG] Loaded ${parsed.length} listings from LocalStorage (sanitized to Himmet Akar).`);
+        }
+      }
+    } catch (err) {
+      console.warn('LocalStorage load error:', err);
+    }
+
+    try {
+      const { doc, getDoc, getFirestore, collection, getDocs, setDoc } = await import('firebase/firestore');
       const { app } = await import('./firebase');
       const db = getFirestore(app);
       
       const collageSnap = await getDoc(doc(db, 'cms', 'home_collage'));
       if (collageSnap.exists()) {
         const data = collageSnap.data();
-        if (data.live) set({ liveCollage: data.live });
-        if (data.draft) set({ draftCollage: data.draft });
+        const sanitizeCollage = (collage: any) => {
+          if (!collage) return collage;
+          const clean = JSON.parse(JSON.stringify(collage));
+          
+          // Backwards compatibility fallbacks
+          ['leftVertical', 'rightTop', 'rightBottom'].forEach(boxKey => {
+            if (clean[boxKey]) {
+              if (!clean[boxKey].imagesWeb || clean[boxKey].imagesWeb.length === 0) {
+                clean[boxKey].imagesWeb = clean[boxKey].images || [];
+              }
+              if (!clean[boxKey].imagesMobile || clean[boxKey].imagesMobile.length === 0) {
+                clean[boxKey].imagesMobile = clean[boxKey].images || [];
+              }
+            }
+          });
+
+          if (clean.leftVertical) {
+            if (clean.leftVertical.link === '/featured-auction') clean.leftVertical.link = '/auctions';
+            if (clean.leftVertical.links) {
+              clean.leftVertical.links = clean.leftVertical.links.map((l: string) => l === '/featured-auction' ? '/auctions' : l);
+            }
+          }
+          if (clean.rightBottom) {
+            if (clean.rightBottom.link === '/featured-auction') clean.rightBottom.link = '/auctions';
+            if (clean.rightBottom.titles && (clean.rightBottom.titles[0]?.includes('Araba') || clean.rightBottom.titles[0]?.includes('araba') || clean.rightBottom.titles[0]?.includes('kaçırmayın'))) {
+              clean.rightBottom.titles[0] = 'Canlı Mezatları İnceleyin!';
+              clean.rightBottom.images[0] = 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=800';
+            }
+          }
+          return clean;
+        };
+        if (data.live) set({ liveCollage: sanitizeCollage(data.live) });
+        if (data.draft) set({ draftCollage: sanitizeCollage(data.draft) });
       }
 
       const auctionSnap = await getDoc(doc(db, 'cms', 'featured_auction'));
@@ -1065,13 +1437,112 @@ export const useAppStore = create<StoreState>((set, get) => ({
         if (live) set({ liveFeaturedAuction: live });
         if (draft) set({ draftFeaturedAuction: draft });
       }
+
+      // Load Ad Pricing
+      const pricingSnap = await getDoc(doc(db, 'cms', 'ad_pricing'));
+      if (pricingSnap.exists()) {
+        set({ adPricing: pricingSnap.data() as AdPricing });
+      }
+
+      // Load Ads from Firestore cms/ads_list
+      try {
+        const adsSnap = await getDoc(doc(db, 'cms', 'ads_list'));
+        if (adsSnap.exists() && adsSnap.data().ads) {
+          const adsList = adsSnap.data().ads as Ad[];
+          set({ ads: adsList });
+          AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(adsList)).catch(err => console.warn(err));
+        } else {
+          const localAdsStr = await AsyncStorage.getItem('mezatliyoruz_ads');
+          if (localAdsStr) set({ ads: JSON.parse(localAdsStr) });
+        }
+      } catch (adErr) {
+        console.warn('Firestore load ads_list error, trying AsyncStorage fallback:', adErr);
+        try {
+          const localAdsStr = await AsyncStorage.getItem('mezatliyoruz_ads');
+          if (localAdsStr) {
+            set({ ads: JSON.parse(localAdsStr) });
+          }
+        } catch (storageErr) {
+          console.warn('AsyncStorage fallback load ads error:', storageErr);
+        }
+      }
+
+      // Load or seed listings
+      const listingsCol = collection(db, 'listings');
+      const listingsSnap = await getDocs(listingsCol);
+      if (listingsSnap.empty) {
+        // Seed database
+        const currentListings = get().listings;
+        for (const l of currentListings) {
+          await setDoc(doc(db, 'listings', l.id), l);
+        }
+        await saveListingsToLocal(currentListings);
+        console.log('[DEBUG] Firestore listings collection seeded.');
+      } else {
+        const loadedListings: Listing[] = [];
+        listingsSnap.forEach((docSnap) => {
+          const item = docSnap.data() as Listing;
+          
+          // Force Himmet Akar as the seller for all listings loaded from Firestore
+          item.sellerName = 'Himmet Akar';
+          item.sellerAvatar = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150';
+          item.sellerTrustScore = 9.9;
+          item.sellerVerified = true;
+          item.sellerId = 'user_himmet';
+
+          if (!item.listingNumber) {
+            let hash = 0;
+            const idStr = item.id || '';
+            for (let i = 0; i < idStr.length; i++) {
+              hash = (hash << 5) - hash + idStr.charCodeAt(i);
+              hash |= 0;
+            }
+            const positiveHash = Math.abs(hash);
+            item.listingNumber = String(100000 + (positiveHash % 900000));
+            
+            // Backfill silently to Firestore
+            (async () => {
+              try {
+                const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+                const { app } = await import('./firebase');
+                const db = getFirestore(app);
+                await setDoc(doc(db, 'listings', item.id), { listingNumber: item.listingNumber }, { merge: true });
+              } catch (e) {
+                console.warn('Failed to backfill listing number in Firestore:', e);
+              }
+            })();
+          }
+          loadedListings.push(item);
+        });
+        loadedListings.sort((a, b) => b.id.localeCompare(a.id));
+
+        // Firestore is the single source of truth.
+        // Only append local listings that are not in Firestore yet
+        // and were user-created (id starts with 'listing_'), not seed data.
+        const localListings = get().listings;
+        const firestoreIds = new Set(loadedListings.map((l) => l.id));
+        const localOnlyNew = localListings.filter(
+          (l) => !firestoreIds.has(l.id) && l.id.startsWith('listing_')
+        );
+        const mergedListings = [...localOnlyNew, ...loadedListings];
+
+        set({ listings: mergedListings });
+        await saveListingsToLocal(mergedListings);
+        console.log(`[DEBUG] Firestore: ${loadedListings.length}, local-only new: ${localOnlyNew.length}, total: ${mergedListings.length}`);
+      }
+
     } catch (e) {
-      console.log('CMS data could not be loaded from Firebase (using offline defaults).');
+      console.log('CMS or listings data could not be loaded from Firebase:', e);
+    } finally {
+      set({ cmsLoaded: true });
     }
   },
 
   registerAccount: (phone, role, name, shopName) => set((state) => {
     let cleanedPhone = phone.replace(/\D/g, '');
+    if (cleanedPhone.startsWith('90')) {
+      cleanedPhone = cleanedPhone.slice(2);
+    }
     if (cleanedPhone.startsWith('0')) {
       cleanedPhone = cleanedPhone.slice(1);
     }
@@ -1093,6 +1564,23 @@ export const useAppStore = create<StoreState>((set, get) => ({
         [role]: newProfile,
       },
     };
+
+    // Save accounts and session
+    AsyncStorage.setItem('mezatliyoruz_accounts', JSON.stringify(updatedAccounts)).catch(err => console.warn(err));
+    if (Platform.OS === 'web') {
+      AsyncStorage.setItem('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving phone on web:', err));
+      AsyncStorage.setItem('user_session_role', role).catch(err => console.warn('Error saving role on web:', err));
+    } else {
+      try {
+        if (SecureStore && typeof SecureStore.setItemAsync === 'function') {
+          SecureStore.setItemAsync('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving secure phone:', err));
+          SecureStore.setItemAsync('user_session_role', role).catch(err => console.warn('Error saving secure role:', err));
+        }
+      } catch (err) {
+        console.warn('SecureStore item saving failed:', err);
+      }
+    }
+
     return {
       accounts: updatedAccounts,
       currentUser: newProfile,
@@ -1101,46 +1589,189 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
   loginAccount: (phone, role) => {
     let cleanedPhone = phone.replace(/\D/g, '');
+    if (cleanedPhone.startsWith('90')) {
+      cleanedPhone = cleanedPhone.slice(2);
+    }
     if (cleanedPhone.startsWith('0')) {
       cleanedPhone = cleanedPhone.slice(1);
     }
     const account = get().accounts[cleanedPhone];
-    if (account && account[role]) {
-      set({ currentUser: account[role] });
-      
-      if (Platform.OS !== 'web') {
-        SecureStore.setItemAsync('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving secure phone:', err));
-        SecureStore.setItemAsync('user_session_role', role).catch(err => console.warn('Error saving secure role:', err));
-      }
+    if (account) {
+      // Find the best match profile inside the account
+      const matchedProfile = account[role] || account['super_admin'] || account['user'] || account['customer'] || account['seller'] || Object.values(account)[0];
+      if (matchedProfile) {
+        set({ currentUser: matchedProfile });
+        
+        if (Platform.OS === 'web') {
+          AsyncStorage.setItem('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving phone on web:', err));
+          AsyncStorage.setItem('user_session_role', matchedProfile.role).catch(err => console.warn('Error saving role on web:', err));
+        } else {
+          try {
+            if (SecureStore && typeof SecureStore.setItemAsync === 'function') {
+              SecureStore.setItemAsync('user_session_phone', cleanedPhone).catch(err => console.warn('Error saving secure phone:', err));
+              SecureStore.setItemAsync('user_session_role', matchedProfile.role).catch(err => console.warn('Error saving secure role:', err));
+            }
+          } catch (err) {
+            console.warn('SecureStore item saving failed:', err);
+          }
+        }
 
-      return true;
+        return true;
+      }
     }
     return false;
   },
 
   logoutAccount: () => {
     set({ currentUser: null });
-    if (Platform.OS !== 'web') {
-      SecureStore.deleteItemAsync('user_session_phone').catch(err => console.warn('Error deleting secure phone:', err));
-      SecureStore.deleteItemAsync('user_session_role').catch(err => console.warn('Error deleting secure role:', err));
+    if (Platform.OS === 'web') {
+      AsyncStorage.removeItem('user_session_phone').catch(err => console.warn('Error deleting phone on web:', err));
+      AsyncStorage.removeItem('user_session_role').catch(err => console.warn('Error deleting role on web:', err));
+    } else {
+      try {
+        if (SecureStore && typeof SecureStore.deleteItemAsync === 'function') {
+          SecureStore.deleteItemAsync('user_session_phone').catch(err => console.warn('Error deleting secure phone:', err));
+          SecureStore.deleteItemAsync('user_session_role').catch(err => console.warn('Error deleting secure role:', err));
+        }
+      } catch (err) {
+        console.warn('SecureStore item deletion failed:', err);
+      }
     }
   },
 
+  assignModerator: (phone, permissions) => set((state) => {
+    let cleanedPhone = phone.replace(/\D/g, '');
+    if (cleanedPhone.startsWith('90')) {
+      cleanedPhone = cleanedPhone.slice(2);
+    }
+    if (cleanedPhone.startsWith('0')) {
+      cleanedPhone = cleanedPhone.slice(1);
+    }
+    const account = state.accounts[cleanedPhone] || {};
+    const baseProfile = account.user || account.seller || account.customer || account.super_admin || account.moderator;
+    if (!baseProfile) return {};
+
+    const newModeratorProfile: UserProfile = {
+      ...baseProfile,
+      role: 'moderator',
+      moderatorPermissions: permissions
+    };
+
+    const updatedAccount = {
+      ...account,
+      moderator: newModeratorProfile
+    };
+
+    const updatedAccounts = {
+      ...state.accounts,
+      [cleanedPhone]: updatedAccount
+    };
+    AsyncStorage.setItem('mezatliyoruz_accounts', JSON.stringify(updatedAccounts)).catch(err => console.warn(err));
+
+    const isCurrent = state.currentUser?.phone === cleanedPhone;
+
+    return {
+      accounts: updatedAccounts,
+      currentUser: isCurrent ? newModeratorProfile : state.currentUser
+    };
+  }),
+
+  removeModerator: (phone) => set((state) => {
+    let cleanedPhone = phone.replace(/\D/g, '');
+    if (cleanedPhone.startsWith('90')) {
+      cleanedPhone = cleanedPhone.slice(2);
+    }
+    if (cleanedPhone.startsWith('0')) {
+      cleanedPhone = cleanedPhone.slice(1);
+    }
+    const account = state.accounts[cleanedPhone] || {};
+    if (!account.moderator) return {};
+
+    const updatedAccount = { ...account };
+    delete updatedAccount.moderator;
+
+    const updatedAccounts = {
+      ...state.accounts,
+      [cleanedPhone]: updatedAccount
+    };
+    AsyncStorage.setItem('mezatliyoruz_accounts', JSON.stringify(updatedAccounts)).catch(err => console.warn(err));
+
+    const isCurrent = state.currentUser?.phone === cleanedPhone && state.currentUser.role === 'moderator';
+    const fallbackProfile = account.user || account.seller || account.customer || null;
+
+    return {
+      accounts: updatedAccounts,
+      currentUser: isCurrent ? fallbackProfile : state.currentUser
+    };
+  }),
+
   restoreSession: async () => {
-    if (Platform.OS === 'web') return;
     try {
-      const phone = await SecureStore.getItemAsync('user_session_phone');
-      const role = await SecureStore.getItemAsync('user_session_role');
+      // Load accounts from LocalStorage first to prevent race condition
+      try {
+        const localAccountsStr = await AsyncStorage.getItem('mezatliyoruz_accounts');
+        if (localAccountsStr) {
+          const parsed = JSON.parse(localAccountsStr);
+          if (parsed && typeof parsed === 'object') {
+            set((state) => ({
+              accounts: {
+                ...state.accounts,
+                ...parsed
+              }
+            }));
+          }
+        }
+      } catch (accountsErr) {
+        console.warn('Error loading accounts inside restoreSession:', accountsErr);
+      }
+
+      // Load customer issues from LocalStorage
+      try {
+        const localIssuesStr = await AsyncStorage.getItem('mezatliyoruz_customer_issues');
+        if (localIssuesStr) {
+          const parsed = JSON.parse(localIssuesStr);
+          if (parsed && Array.isArray(parsed)) {
+            set({ customerIssues: parsed });
+          }
+        }
+      } catch (issuesErr) {
+        console.warn('Error loading customer issues inside restoreSession:', issuesErr);
+      }
+
+      // Load saved addresses from LocalStorage
+      try {
+        const localAddressesStr = await AsyncStorage.getItem('mezatliyoruz_saved_addresses');
+        if (localAddressesStr) {
+          const parsed = JSON.parse(localAddressesStr);
+          if (parsed && Array.isArray(parsed)) {
+            set({ savedAddresses: parsed });
+          }
+        }
+      } catch (addrErr) {
+        console.warn('Error loading saved addresses inside restoreSession:', addrErr);
+      }
+
+      let phone = null;
+      let role = null;
+      if (Platform.OS === 'web') {
+        phone = await AsyncStorage.getItem('user_session_phone');
+        role = await AsyncStorage.getItem('user_session_role');
+      } else {
+        if (SecureStore && typeof SecureStore.getItemAsync === 'function') {
+          phone = await SecureStore.getItemAsync('user_session_phone');
+          role = await SecureStore.getItemAsync('user_session_role');
+        }
+      }
       if (phone && role) {
         const state = get();
         const account = state.accounts[phone];
         if (account && account[role as keyof typeof account]) {
           set({ currentUser: account[role as keyof typeof account]! });
-          console.log('[DEBUG] SecureStore session restored successfully:', phone, role);
+          console.log('[DEBUG] Session restored successfully:', phone, role);
         }
       }
     } catch (err) {
-      console.warn('Error restoring secure store session:', err);
+      console.warn('Error restoring session:', err);
     }
   },
 
@@ -1162,58 +1793,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
     };
   }),
  
-  stories: [
-    {
-      id: 'story_mock_1',
-      sellerId: 'seller_1',
-      sellerName: 'Akar Antika',
-      sellerAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      mediaUrl: 'https://firebasestorage.googleapis.com/v0/b/mezatliyoruz.firebasestorage.app/o/videos%2Fvideo_1.mp4?alt=media&token=ea1b33fa-45e8-4b1b-8f58-6d1ff8ea8cde',
-      createdAt: Date.now() - 2 * 60 * 60 * 1000,
-      productId: '1',
-      mediaType: 'video',
-    },
-    {
-      id: 'story_mock_2',
-      sellerId: 'seller_2',
-      sellerName: 'Retro Bazaar',
-      sellerAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150',
-      mediaUrl: 'https://images.unsplash.com/photo-1603006905003-be475563bc59?w=800',
-      createdAt: Date.now() - 4 * 60 * 60 * 1000,
-      productId: '2',
-      mediaType: 'image',
-    },
-    {
-      id: 'story_mock_3',
-      sellerId: 'seller_3',
-      sellerName: 'Nostalji Evi',
-      sellerAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-      mediaUrl: 'https://images.unsplash.com/photo-1472289065668-ce650ac443d2?w=800',
-      createdAt: Date.now() - 6 * 60 * 60 * 1000,
-      productId: '3',
-      mediaType: 'image',
-    },
-    {
-      id: 'story_mock_4',
-      sellerId: 'seller_4',
-      sellerName: 'Koleksiyoner',
-      sellerAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-      mediaUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=800',
-      createdAt: Date.now() - 8 * 60 * 60 * 1000,
-      productId: '4',
-      mediaType: 'image',
-    },
-    {
-      id: 'story_mock_5',
-      sellerId: 'seller_5',
-      sellerName: 'El Emeği Sanat',
-      sellerAvatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150',
-      mediaUrl: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=800',
-      createdAt: Date.now() - 10 * 60 * 60 * 1000,
-      productId: '5',
-      mediaType: 'image',
-    }
-  ],
+  stories: [],
  
   addStory: (story) => set((state) => {
     const isVideo = story.mediaUrl.toLowerCase().endsWith('.mp4') || 
@@ -1231,6 +1811,141 @@ export const useAppStore = create<StoreState>((set, get) => ({
         ...state.stories
       ]
     };
+  }),
+
+  createAd: (ad) => set((state) => {
+    const durationDays = ad.durationType === '1day' ? 1 : ad.durationType === '3days' ? 3 : ad.durationType === '1week' ? 7 : 30;
+    const now = Date.now();
+    const newAd: Ad = {
+      ...ad,
+      id: `ad_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      startDate: now,
+      endDate: now + durationDays * 24 * 60 * 60 * 1000,
+      status: 'active'
+    };
+    const newAds = [newAd, ...state.ads];
+    
+    // Save to Firestore
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ads_list'), { ads: newAds }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to save ads to Firestore:', e);
+      }
+    })();
+
+    AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(newAds)).catch(err => console.warn(err));
+    return { ads: newAds };
+  }),
+
+  updateAdPricing: (pricing) => set(() => {
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ad_pricing'), pricing);
+      } catch (e) {
+        console.warn('Failed to sync ad pricing to firestore:', e);
+      }
+    })();
+    return { adPricing: pricing };
+  }),
+
+  approveAd: (adId) => set((state) => {
+    const newAds = state.ads.map(ad => ad.id === adId ? { ...ad, status: 'active' as const } : ad);
+    
+    // Sync to Firestore
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ads_list'), { ads: newAds }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to approve ad in Firestore:', e);
+      }
+    })();
+
+    AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(newAds)).catch(err => console.warn(err));
+    return { ads: newAds };
+  }),
+
+  rejectAd: (adId) => set((state) => {
+    const newAds = state.ads.map(ad => ad.id === adId ? { ...ad, status: 'expired' as const } : ad);
+
+    // Sync to Firestore
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ads_list'), { ads: newAds }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to reject ad in Firestore:', e);
+      }
+    })();
+
+    AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(newAds)).catch(err => console.warn(err));
+    return { ads: newAds };
+  }),
+
+  updateAd: (adId, updatedFields) => set((state) => {
+    const newAds = state.ads.map(ad => ad.id === adId ? { ...ad, ...updatedFields } : ad);
+
+    // Sync to Firestore
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ads_list'), { ads: newAds }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to update ad in Firestore:', e);
+      }
+    })();
+
+    AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(newAds)).catch(err => console.warn(err));
+    return { ads: newAds };
+  }),
+
+  deleteAd: (adId) => set((state) => {
+    const newAds = state.ads.filter(ad => ad.id !== adId);
+
+    // Sync to Firestore
+    (async () => {
+      try {
+        const { doc, setDoc, getFirestore } = await import('firebase/firestore');
+        const { app } = await import('./firebase');
+        const db = getFirestore(app);
+        await setDoc(doc(db, 'cms', 'ads_list'), { ads: newAds }, { merge: true });
+      } catch (e) {
+        console.warn('Failed to delete ad from Firestore:', e);
+      }
+    })();
+
+    AsyncStorage.setItem('mezatliyoruz_ads', JSON.stringify(newAds)).catch(err => console.warn(err));
+    return { ads: newAds };
+  }),
+
+  toggleAdDurationOption: (durationType, enabled) => set((state) => {
+    const current = state.adPricing[durationType];
+    const updatedPricing = {
+      ...state.adPricing,
+      [durationType]: { ...current, enabled }
+    };
+    try {
+      const { doc, setDoc, getFirestore } = require('firebase/firestore');
+      const { app } = require('./firebase');
+      const db = getFirestore(app);
+      setDoc(doc(db, 'cms', 'ad_pricing'), updatedPricing);
+    } catch (e) {
+      console.warn('Failed to sync ad pricing to firestore:', e);
+    }
+    return { adPricing: updatedPricing };
   }),
 
  
@@ -1270,10 +1985,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  approveRentACarApplication: (appId) => set((state) => {
+  approveRentACarApplication: (appId, note) => set((state) => {
     const updatedApps = state.rentACarApplications.map((app) => {
       if (app.id === appId) {
-        return { ...app, status: 'approved' as const };
+        return { ...app, status: 'approved' as const, adminNote: note || '' };
       }
       return app;
     });
@@ -1283,7 +1998,6 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
     const targetUserId = targetApp.userId;
     
-    // Update the listings of this user to active if they were pending
     const updatedListings = state.listings.map((l) => {
       if (l.sellerName === targetApp.shopName || l.sellerName === targetApp.userName) {
         if (l.status === 'pending_approval') {
@@ -1293,17 +2007,16 @@ export const useAppStore = create<StoreState>((set, get) => ({
       return l;
     });
 
-    // Update currentUser if it matches the targetUserId
     let updatedCurrentUser = state.currentUser;
     if (updatedCurrentUser && updatedCurrentUser.id === targetUserId) {
       updatedCurrentUser = {
         ...updatedCurrentUser,
         isRentACarApproved: true,
-        rentACarApplicationStatus: 'approved' as const
+        rentACarApplicationStatus: 'approved' as const,
+        role: 'seller'
       };
     }
 
-    // Update in accounts
     let updatedAccounts = { ...state.accounts };
     Object.keys(updatedAccounts).forEach((phone) => {
       const acc = updatedAccounts[phone];
@@ -1313,7 +2026,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
           acc[role as keyof typeof acc] = {
             ...profile,
             isRentACarApproved: true,
-            rentACarApplicationStatus: 'approved' as const
+            rentACarApplicationStatus: 'approved' as const,
+            role: 'seller'
           } as any;
         }
       });
@@ -1327,10 +2041,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
     };
   }),
 
-  rejectRentACarApplication: (appId) => set((state) => {
+  rejectRentACarApplication: (appId, note) => set((state) => {
     const updatedApps = state.rentACarApplications.map((app) => {
       if (app.id === appId) {
-        return { ...app, status: 'rejected' as const };
+        return { ...app, status: 'rejected' as const, adminNote: note || '' };
       }
       return app;
     });
@@ -1340,7 +2054,6 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
     const targetUserId = targetApp.userId;
 
-    // Update currentUser if it matches
     let updatedCurrentUser = state.currentUser;
     if (updatedCurrentUser && updatedCurrentUser.id === targetUserId) {
       updatedCurrentUser = {
@@ -1350,7 +2063,6 @@ export const useAppStore = create<StoreState>((set, get) => ({
       };
     }
 
-    // Update in accounts
     let updatedAccounts = { ...state.accounts };
     Object.keys(updatedAccounts).forEach((phone) => {
       const acc = updatedAccounts[phone];
@@ -1399,38 +2111,25 @@ export const useAppStore = create<StoreState>((set, get) => ({
       lat = 41.0082 + (Math.random() - 0.5) * 0.3;
       lon = 28.9784 + (Math.random() - 0.5) * 0.3;
     }
-    return { ...l, latitude: lat, longitude: lon };
+    // Set all initial listings to belong to Himmet Akar and clear bid histories for production launch
+    return {
+      ...l,
+      latitude: lat,
+      longitude: lon,
+      sellerName: 'Himmet Akar',
+      sellerAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      sellerTrustScore: 9.9,
+      sellerVerified: true,
+      sellerId: 'user_himmet',
+      bids: [],
+      bidsCount: 0,
+      lastBidderId: undefined,
+      lastBidderName: undefined,
+      lastBidderAvatar: undefined
+    };
   }),
-  chats: initialChats,
-  reviews: [
-    {
-      id: 'rev_1',
-      sellerName: 'Buse Giyim',
-      authorName: 'Himmet Akar',
-      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      rating: 5,
-      comment: 'Trençkot harika çıktı, sıfır gibi tertemiz kokuyordu. Çok teşekkürler!',
-      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
-    },
-    {
-      id: 'rev_2',
-      sellerName: 'Mega Holding A.Ş.',
-      authorName: 'Buse Giyim',
-      authorAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-      rating: 5,
-      comment: 'Güvenilir kurumsal satıcı, kargo süper hızlı geldi ve ürün tam anlatıldığı gibiydi.',
-      createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
-    },
-    {
-      id: 'rev_3',
-      sellerName: 'Elif Dekor',
-      authorName: 'Himmet Akar',
-      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      rating: 4,
-      comment: 'Örme salıncak çok güzel ve sağlam ancak kargolama biraz yavaş oldu.',
-      createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toLocaleDateString('tr-TR'),
-    }
-  ],
+  chats: [],
+  reviews: [],
   addReview: (review) => set((state) => ({
     reviews: [
       ...state.reviews,
@@ -1507,25 +2206,48 @@ export const useAppStore = create<StoreState>((set, get) => ({
   checkoutStep: 'cart',
   setCheckoutStep: (step) => set({ checkoutStep: step }),
 
-  toggleLike: (listingId) => set((state) => ({
-    listings: state.listings.map((l) =>
+  toggleLike: (listingId) => set((state) => {
+    const updatedListings = state.listings.map((l) =>
       l.id === listingId
         ? { ...l, liked: !l.liked, favoritesCount: l.liked ? l.favoritesCount - 1 : l.favoritesCount + 1 }
         : l
-    ),
-  })),
+    );
+    const target = updatedListings.find((l) => l.id === listingId);
+    if (target) saveListingToFirestore(target);
+    saveListingsToLocal(updatedListings);
+    return { listings: updatedListings };
+  }),
 
-  toggleFavorite: (listingId) => set((state) => ({
-    listings: state.listings.map((l) =>
+  toggleFavorite: (listingId) => set((state) => {
+    const updatedListings = state.listings.map((l) =>
       l.id === listingId ? { ...l, favorited: !l.favorited } : l
-    ),
-  })),
+    );
+    const target = updatedListings.find((l) => l.id === listingId);
+    if (target) saveListingToFirestore(target);
+    saveListingsToLocal(updatedListings);
+    return { listings: updatedListings };
+  }),
 
-  placeBid: (listingId, amount) => {
+  placeBid: (listingId, amount, customBidder) => {
     let success = false;
     let error: string | undefined;
 
     set((state) => {
+      const bidder = customBidder || state.currentUser;
+      if (!bidder) {
+        error = 'Teklif vermek için lütfen giriş yapın.';
+        return {};
+      }
+      const bidderWithBan = bidder as any;
+      if (bidderWithBan.liveAuctionBanUntil && bidderWithBan.liveAuctionBanUntil > Date.now()) {
+        const remainingDays = Math.ceil((bidderWithBan.liveAuctionBanUntil - Date.now()) / (24 * 60 * 60 * 1000));
+        error = `Canlı mezat katılım engeliniz bulunmaktadır. (Kalan Süre: ${remainingDays} gün). Ödemesi 48 saat içinde yapılmayan mezatlar nedeniyle askıya alındınız.`;
+        return {};
+      }
+      const bidderId = bidder.id;
+      const bidderName = bidder.name;
+      const bidderAvatar = bidder.avatar;
+
       const updatedListings = state.listings.map((l) => {
         if (l.id === listingId) {
           if (l.type !== 'auction') {
@@ -1536,8 +2258,15 @@ export const useAppStore = create<StoreState>((set, get) => ({
             error = 'Açık artırma süresi doldu.';
             return l;
           }
-          if (amount <= l.price) {
-            error = `Teklif miktarı mevcut fiyattan (${l.price} TL) yüksek olmalıdır.`;
+          if (l.lastBidderId && l.lastBidderId === bidderId) {
+            error = 'En yüksek teklif zaten sizin. Tekrar teklif veremezsiniz.';
+            return l;
+          }
+          
+          const increment = l.minIncrement !== undefined ? l.minIncrement : 10;
+          const minRequired = l.price + increment;
+          if (amount < minRequired) {
+            error = `Teklif miktarı en az ${minRequired} TL olmalıdır (Minimum artış: ${increment} TL).`;
             return l;
           }
 
@@ -1549,15 +2278,252 @@ export const useAppStore = create<StoreState>((set, get) => ({
             newTimeLeft = l.timeLeft + 120;
           }
 
-          return {
+          const newBid: Bid = {
+            id: `bid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            bidderId,
+            bidderName,
+            bidderAvatar,
+            amount,
+            timestamp: Date.now(),
+          };
+
+          let updatedListing: Listing = {
             ...l,
             price: amount,
             bidsCount: (l.bidsCount || 0) + 1,
             timeLeft: newTimeLeft,
+            lastBidderId: bidderId,
+            lastBidderName: bidderName,
+            lastBidderAvatar: bidderAvatar,
+            bids: [newBid, ...(l.bids || [])],
+          };
+
+          // Clamp and handle Buy Now (reservePrice) limit check immediately:
+          if (l.reservePrice && amount >= l.reservePrice) {
+            updatedListing.price = l.reservePrice;
+            updatedListing.auctionStatus = 'won';
+            updatedListing.auctionWinnerId = bidderId;
+            updatedListing.auctionWinnerName = bidderName;
+            updatedListing.auctionWinnerAvatar = bidderAvatar;
+            updatedListing.timeLeft = 0;
+            updatedListing.endTime = Date.now();
+            updatedListing.auctionWonAt = Date.now();
+            updatedListing.auctionPaymentDeadline = Date.now() + 48 * 60 * 60 * 1000;
+            if (updatedListing.bids && updatedListing.bids.length > 0) {
+              updatedListing.bids[0].amount = l.reservePrice;
+            }
+          } else {
+            // Trigger auto-bid evaluation against this new manual bid
+            updatedListing = processAutoBids(updatedListing);
+            
+            // Check if auto-bids reached the Buy Now Price limit:
+            if (l.reservePrice && updatedListing.price >= l.reservePrice) {
+              updatedListing.price = l.reservePrice;
+              updatedListing.auctionStatus = 'won';
+              updatedListing.auctionWinnerId = updatedListing.lastBidderId;
+              updatedListing.auctionWinnerName = updatedListing.lastBidderName;
+              updatedListing.auctionWinnerAvatar = updatedListing.lastBidderAvatar;
+              updatedListing.timeLeft = 0;
+              updatedListing.endTime = Date.now();
+              updatedListing.auctionWonAt = Date.now();
+              updatedListing.auctionPaymentDeadline = Date.now() + 48 * 60 * 60 * 1000;
+              if (updatedListing.bids && updatedListing.bids.length > 0) {
+                updatedListing.bids[0].amount = l.reservePrice;
+              }
+            }
+          }
+          return updatedListing;
+        }
+        return l;
+      });
+
+      let newCart = [...state.cart];
+      let newNotifications = [...(state.notifications || [])];
+
+      const target = updatedListings.find((l) => l.id === listingId);
+      if (target && success) {
+        if (target.auctionStatus === 'won') {
+          const winnerId = target.auctionWinnerId;
+          
+          // 1. If the winner is current user, automatically add to cart
+          if (state.currentUser && winnerId === state.currentUser.id) {
+            const inCart = newCart.some(item => item.listing.id === target.id);
+            if (!inCart) {
+              newCart.push({ listing: target, quantity: 1 });
+            }
+          }
+
+          // 2. Create notification for the winner
+          const now = Date.now();
+          const newNotif: Notification = {
+            id: `notif_${now}_won_${target.id}`,
+            userId: winnerId!,
+            title: '🏆 Mezatı Kazandınız!',
+            message: `Tebrikler! "${target.title}" mezatını hemen al fiyatıyla kazandınız. Siparişinizi tamamlamak için 48 saatiniz bulunmaktadır.`,
+            createdAt: new Date().toISOString(),
+            isRead: false,
+            type: 'cart'
+          };
+          newNotifications = [newNotif, ...newNotifications];
+
+          // 3. Create lost notifications for other bidders
+          const otherBidders = Array.from(new Set(
+            (target.bids || [])
+              .map(bid => bid.bidderId)
+              .filter(bidderId => bidderId && bidderId !== winnerId)
+          ));
+
+          otherBidders.forEach(bidderId => {
+            const newLostNotif: Notification = {
+              id: `notif_${now}_lost_${target.id}_${bidderId}`,
+              userId: bidderId,
+              title: '😢 Mezatı Kaybettiniz',
+              message: `Katıldığınız "${target.title}" mezatını kaybettiniz. Fiyatları daha yakında takip ederek bir dahaki sefere şansınızı artırın.`,
+              createdAt: new Date().toISOString(),
+              isRead: false,
+              type: 'product',
+              productId: target.id
+            };
+            newNotifications = [newLostNotif, ...newNotifications];
+          });
+        }
+
+        saveListingToFirestore(target);
+        saveListingsToLocal(updatedListings);
+      }
+
+      return { 
+        listings: updatedListings,
+        cart: newCart,
+        notifications: newNotifications
+      };
+    });
+
+    return { success, error };
+  },
+
+  setAutoBidLimit: (listingId, maxAmount) => {
+    let success = false;
+    let error: string | undefined;
+
+    set((state) => {
+      const currentUser = state.currentUser;
+      if (!currentUser) {
+        error = 'Otomasyonu başlatmak için giriş yapmalısınız.';
+        return {};
+      }
+
+      const updatedListings = state.listings.map((l) => {
+        if (l.id === listingId) {
+          if (l.type !== 'auction') {
+            error = 'Bu ürün açık artırmada değil.';
+            return l;
+          }
+          if (l.timeLeft !== undefined && l.timeLeft <= 0) {
+            error = 'Açık artırma süresi doldu.';
+            return l;
+          }
+          
+          const minIncrement = l.minIncrement !== undefined ? l.minIncrement : 10;
+          const minRequired = l.price + minIncrement;
+          if (maxAmount < minRequired) {
+            error = `Maksimum limit en az ${minRequired} TL olmalıdır (Mevcut fiyat + min artış).`;
+            return l;
+          }
+
+          success = true;
+          
+          // Add or update auto-bid for current user
+          const existingAutoBids = l.autoBids || [];
+          const otherAutoBids = existingAutoBids.filter(ab => ab.bidderId !== currentUser.id);
+          const newAutoBid: AutoBid = {
+            bidderId: currentUser.id,
+            bidderName: currentUser.name,
+            bidderAvatar: currentUser.avatar,
+            maxAmount,
+            createdAt: Date.now()
+          };
+          
+          let updatedListing: Listing = {
+            ...l,
+            autoBids: [...otherAutoBids, newAutoBid]
+          };
+
+          // Trigger auto-bid immediately if the user is not the current highest bidder
+          if (updatedListing.lastBidderId !== currentUser.id) {
+            const bidAmount = Math.min(updatedListing.price + minIncrement, maxAmount);
+            if (bidAmount >= updatedListing.price + minIncrement) {
+              let newTimeLeft = updatedListing.timeLeft;
+              if (newTimeLeft !== undefined && newTimeLeft < 120) {
+                newTimeLeft = newTimeLeft + 120;
+              }
+              
+              const newBid: Bid = {
+                id: `bid_auto_init_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                bidderId: currentUser.id,
+                bidderName: currentUser.name,
+                bidderAvatar: currentUser.avatar,
+                amount: bidAmount,
+                timestamp: Date.now()
+              };
+              
+              updatedListing.price = bidAmount;
+              updatedListing.bidsCount = (updatedListing.bidsCount || 0) + 1;
+              updatedListing.timeLeft = newTimeLeft;
+              updatedListing.lastBidderId = currentUser.id;
+              updatedListing.lastBidderName = currentUser.name;
+              updatedListing.lastBidderAvatar = currentUser.avatar;
+              updatedListing.bids = [newBid, ...(updatedListing.bids || [])];
+            }
+          }
+          
+          // Process other auto-bids in response to this
+          updatedListing = processAutoBids(updatedListing);
+          return updatedListing;
+        }
+        return l;
+      });
+
+      const target = updatedListings.find((l) => l.id === listingId);
+      if (target && success) {
+        saveListingToFirestore(target);
+        saveListingsToLocal(updatedListings);
+      }
+
+      return { listings: updatedListings };
+    });
+
+    return { success, error };
+  },
+
+  cancelAutoBidLimit: (listingId) => {
+    let success = false;
+    let error: string | undefined;
+
+    set((state) => {
+      const currentUser = state.currentUser;
+      if (!currentUser) {
+        error = 'Giriş yapmalısınız.';
+        return {};
+      }
+
+      const updatedListings = state.listings.map((l) => {
+        if (l.id === listingId) {
+          const existingAutoBids = l.autoBids || [];
+          success = true;
+          return {
+            ...l,
+            autoBids: existingAutoBids.filter(ab => ab.bidderId !== currentUser.id)
           };
         }
         return l;
       });
+
+      const target = updatedListings.find((l) => l.id === listingId);
+      if (target && success) {
+        saveListingToFirestore(target);
+        saveListingsToLocal(updatedListings);
+      }
 
       return { listings: updatedListings };
     });
@@ -1630,9 +2596,12 @@ export const useAppStore = create<StoreState>((set, get) => ({
     })
   })),
 
-  createChat: (listingId, fromSellerProfile) => {
+  createChat: (listingId, fromSellerProfile, targetUser) => {
     const state = get();
-    const existingChat = state.chats.find((c) => c.listingId === listingId && c.fromSellerProfile === fromSellerProfile);
+    const otherPartyName = targetUser ? targetUser.name : (state.listings.find(l => l.id === listingId)?.sellerName || 'Satıcı');
+    const otherPartyAvatar = targetUser ? targetUser.avatar : (state.listings.find(l => l.id === listingId)?.sellerAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150');
+
+    const existingChat = state.chats.find((c) => c.listingId === listingId && c.otherPartyName === otherPartyName);
     if (existingChat) {
       return existingChat.id;
     }
@@ -1646,8 +2615,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
       listingId: listing.id,
       listingTitle: listing.title,
       listingImage: listing.photos[0],
-      otherPartyName: listing.sellerName,
-      otherPartyAvatar: listing.sellerAvatar,
+      otherPartyName,
+      otherPartyAvatar,
       fromSellerProfile: fromSellerProfile,
       messages: [
         {
@@ -1670,27 +2639,236 @@ export const useAppStore = create<StoreState>((set, get) => ({
   decrementTimers: () => set((state) => {
     const now = Date.now();
     const twentyFourHours = 24 * 60 * 60 * 1000;
-    return {
-      listings: state.listings.map((l) => {
-        if (l.type === 'auction' && l.timeLeft !== undefined && l.timeLeft > 0) {
-          return {
-            ...l,
-            timeLeft: l.timeLeft - 1
-          };
+    
+    let newNotifications = [...state.notifications];
+    let newCart = [...state.cart];
+    let newAccounts = { ...state.accounts };
+    let newCurrentUser = state.currentUser;
+    let forceSaveToLocal = false;
+
+    const updatedListings = state.listings.map((l) => {
+      if (l.type === 'auction') {
+        const updatedListing = { ...l };
+        let newTimeLeft = l.timeLeft;
+
+        if (l.endTime) {
+          newTimeLeft = Math.max(0, Math.round((l.endTime - now) / 1000));
+        } else if (l.timeLeft !== undefined && l.timeLeft > 0) {
+          newTimeLeft = l.timeLeft - 1;
         }
-        return l;
-      }),
-      stories: state.stories.filter((story) => now - story.createdAt < twentyFourHours)
+
+        updatedListing.timeLeft = newTimeLeft;
+
+        // Transition 1: Auction has just ended
+        if (newTimeLeft === 0 && (l.auctionStatus === undefined || l.auctionStatus === 'active')) {
+          // Set to won or expired
+          if (l.lastBidderId) {
+            updatedListing.auctionStatus = 'won';
+            updatedListing.auctionWinnerId = l.lastBidderId;
+            updatedListing.auctionWinnerName = l.lastBidderName;
+            updatedListing.auctionWinnerAvatar = l.lastBidderAvatar;
+            updatedListing.auctionWonAt = now;
+            updatedListing.auctionPaymentDeadline = now + 48 * 60 * 60 * 1000; // 48h
+            
+            // If the winner is current user, automatically add to cart
+            if (state.currentUser && l.lastBidderId === state.currentUser.id) {
+              const inCart = newCart.some(item => item.listing.id === l.id);
+              if (!inCart) {
+                newCart.push({ listing: updatedListing, quantity: 1 });
+              }
+            }
+
+            // Create notification for the winner
+            const newNotif: Notification = {
+              id: `notif_${now}_won_${l.id}`,
+              userId: l.lastBidderId,
+              title: '🏆 Mezatı Kazandınız!',
+              message: `Tebrikler! "${l.title}" mezatını kazandınız. Siparişinizi tamamlamak için 48 saatiniz bulunmaktadır.`,
+              createdAt: new Date().toISOString(),
+              isRead: false,
+              type: 'cart'
+            };
+            newNotifications = [newNotif, ...newNotifications];
+
+            // Notify other participants who lost the auction
+            const otherBidders = Array.from(new Set(
+              (l.bids || [])
+                .map(bid => bid.bidderId)
+                .filter(bidderId => bidderId && bidderId !== l.lastBidderId)
+            ));
+
+            otherBidders.forEach(bidderId => {
+              const newLostNotif: Notification = {
+                id: `notif_${now}_lost_${l.id}_${bidderId}`,
+                userId: bidderId,
+                title: '😢 Mezatı Kaybettiniz',
+                message: `Katıldığınız "${l.title}" mezatını kaybettiniz. Fiyatları daha yakından takip ederek bir dahaki sefere şansınızı artırın.`,
+                createdAt: new Date().toISOString(),
+                isRead: false,
+                type: 'product',
+                productId: l.id
+              };
+              newNotifications = [newLostNotif, ...newNotifications];
+
+              if (Platform.OS !== 'web') {
+                Notifications.scheduleNotificationAsync({
+                  content: {
+                    title: newLostNotif.title,
+                    body: newLostNotif.message,
+                    sound: true,
+                    priority: Notifications.AndroidNotificationPriority.HIGH,
+                  },
+                  trigger: null,
+                }).catch((err: any) => console.warn('Error scheduling local notification:', err));
+              }
+            });
+
+            // Schedule local push notification if mobile
+            if (Platform.OS !== 'web') {
+              Notifications.scheduleNotificationAsync({
+                content: {
+                  title: newNotif.title,
+                  body: newNotif.message,
+                  sound: true,
+                  priority: Notifications.AndroidNotificationPriority.HIGH,
+                },
+                trigger: null,
+              }).catch((err: any) => console.warn('Error scheduling local notification:', err));
+            }
+          } else {
+            updatedListing.auctionStatus = 'expired'; // closed without winner
+          }
+          forceSaveToLocal = true;
+        }
+
+        // Transition 2: Mezat is won but not purchased yet, check reminders and deadlines
+        if (updatedListing.auctionStatus === 'won') {
+          // Check deadline (48 hours)
+          if (updatedListing.auctionPaymentDeadline && now > updatedListing.auctionPaymentDeadline) {
+            updatedListing.auctionStatus = 'expired';
+            
+            const winnerId = updatedListing.auctionWinnerId;
+            if (winnerId) {
+              // Apply 3-month ban
+              const banUntil = now + 90 * 24 * 60 * 60 * 1000;
+              
+              if (newCurrentUser && newCurrentUser.id === winnerId) {
+                newCurrentUser = {
+                  ...newCurrentUser,
+                  liveAuctionBanUntil: banUntil
+                };
+              }
+
+              Object.keys(newAccounts).forEach((phone) => {
+                const acc = newAccounts[phone];
+                ['user', 'super_admin', 'customer', 'seller'].forEach((role) => {
+                  const profile = acc[role as keyof typeof acc];
+                  if (profile && profile.id === winnerId) {
+                    acc[role as keyof typeof acc] = {
+                      ...profile,
+                      liveAuctionBanUntil: banUntil
+                    } as any;
+                  }
+                });
+              });
+
+              // Remove from cart
+              newCart = newCart.filter(item => item.listing.id !== l.id);
+
+              // Send penalty notification
+              const newNotif: Notification = {
+                id: `notif_${now}_penalty_${l.id}`,
+                userId: winnerId,
+                title: '🚨 Canlı Mezat Cezası',
+                message: `"${l.title}" ürünü için 48 saatlik satın alma süresi dolduğundan canlı mezatlara katılımınız 3 ay süreyle askıya alınmıştır.`,
+                createdAt: new Date().toISOString(),
+                isRead: false,
+                type: 'system'
+              };
+              newNotifications = [newNotif, ...newNotifications];
+
+              // Schedule local push notification if mobile
+              if (Platform.OS !== 'web') {
+                Notifications.scheduleNotificationAsync({
+                  content: {
+                    title: newNotif.title,
+                    body: newNotif.message,
+                    sound: true,
+                    priority: Notifications.AndroidNotificationPriority.HIGH,
+                  },
+                  trigger: null,
+                }).catch((err: any) => console.warn('Error scheduling local notification:', err));
+              }
+            }
+            forceSaveToLocal = true;
+          } 
+          // Check 6-hour reminder
+          else {
+            const lastReminder = updatedListing.lastReminderSentAt || updatedListing.auctionWonAt || now;
+            if (now - lastReminder >= 6 * 60 * 60 * 1000) {
+              const currentHour = new Date().getHours();
+              // Between 10:00 AM and 10:00 PM (10 to 22)
+              if (currentHour >= 10 && currentHour < 22) {
+                updatedListing.lastReminderSentAt = now;
+                
+                const winnerId = updatedListing.auctionWinnerId;
+                if (winnerId) {
+                  const newNotif: Notification = {
+                    id: `notif_${now}_reminder_${l.id}`,
+                    userId: winnerId,
+                    title: '🔔 Ödeme Hatırlatması',
+                    message: `Önemli: Kazandığınız "${l.title}" mezatının ödeme süresi dolmak üzere. Canlı mezatlara katılımınızın engellenmemesi için hemen siparişinizi tamamlayın.`,
+                    createdAt: new Date().toISOString(),
+                    isRead: false,
+                    type: 'cart'
+                  };
+                  newNotifications = [newNotif, ...newNotifications];
+
+                  // Schedule local push notification if mobile
+                  if (Platform.OS !== 'web') {
+                    Notifications.scheduleNotificationAsync({
+                      content: {
+                        title: newNotif.title,
+                        body: newNotif.message,
+                        sound: true,
+                        priority: Notifications.AndroidNotificationPriority.HIGH,
+                      },
+                      trigger: null,
+                    }).catch((err: any) => console.warn('Error scheduling local notification:', err));
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        return updatedListing;
+      }
+      return l;
+    });
+
+    if (forceSaveToLocal) {
+      saveListingsToLocal(updatedListings);
+    }
+
+    return {
+      listings: updatedListings,
+      stories: state.stories.filter((story) => now - story.createdAt < twentyFourHours),
+      notifications: newNotifications,
+      cart: newCart,
+      accounts: newAccounts,
+      currentUser: newCurrentUser
     };
   }),
   addOrder: (order) => {
     const state = get();
-    // Recalculate secure server-side totalAmount using DB prices
-    const secureTotalAmount = order.items.reduce((sum, item) => {
+    // Recalculate secure server-side totalAmount using DB prices and shipping fee
+    const itemSubtotal = order.items.reduce((sum, item) => {
       const dbListing = state.listings.find(l => l.id === item.listing.id);
       const actualPrice = dbListing ? dbListing.price : item.listing.price;
       return sum + actualPrice * item.quantity;
     }, 0);
+    const secureTotalAmount = itemSubtotal + (order.shippingFee || 0);
 
     const generatedId = 'MZ-' + Math.floor(100000 + Math.random() * 900000);
     const newOrder: Order = {
@@ -1726,10 +2904,14 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set(s => ({ chats: [...s.chats, newChat] }));
     }
 
+    const cargoInfoText = order.shippingCompany 
+      ? `\nKargo Firması: ${order.shippingCompany}\nKargo Ücreti: ${order.shippingFee} TL (Alıcı Ödemeli)\nKargo Takip Kodu: ${newOrder.trackingNumber || 'Hazırlanıyor'}`
+      : '\nKargo: Mağazadan Teslim';
+
     const newMsg: Message = {
       id: `msg_order_${Date.now()}`,
       senderId: 'system',
-      text: `🛒 YENİ SİPARİŞ! Sipariş No: ${generatedId}\nÜrün: ${listing.title}\nAdet: ${order.items[0].quantity}\nAlıcı: ${order.buyerName}\nAdres: ${order.buyerAddress}\nDurum: Sipariş Alındı (Ödeme onaylandı).`,
+      text: `🛒 YENİ SİPARİŞ! Sipariş No: ${generatedId}\nÜrün: ${listing.title}\nAdet: ${order.items[0].quantity}\nAlıcı: ${order.buyerName}\nAdres: ${order.buyerAddress}${cargoInfoText}\nDurum: Sipariş Alındı (Ödeme onaylandı).`,
       timestamp: new Date(),
       type: 'text',
     };
@@ -1764,10 +2946,60 @@ export const useAppStore = create<StoreState>((set, get) => ({
         isRead: false
       };
 
+      const extraNotifications: Notification[] = [];
+      const updatedListings = s.listings.map((item) => {
+        const purchasedItem = order.items.find(oi => oi.listing.id === item.id);
+        if (purchasedItem) {
+          if (item.type === 'auction') {
+            return {
+              ...item,
+              auctionStatus: 'purchased' as const
+            };
+          } else {
+            const currentStock = item.stock !== undefined ? item.stock : 1;
+            const newStock = Math.max(0, currentStock - purchasedItem.quantity);
+            
+            if (newStock === 0) {
+              let sellerId = item.sellerId || 'demo_seller_mega_id';
+              Object.values(s.accounts).forEach((acc: any) => {
+                ['seller', 'user', 'super_admin'].forEach((role) => {
+                  const prof = acc[role];
+                  if (prof && (prof.shopName === item.sellerName || prof.name === item.sellerName)) {
+                    sellerId = prof.id;
+                  }
+                });
+              });
+
+              extraNotifications.push({
+                id: `notif_stock_out_${Date.now()}_${item.id}`,
+                userId: sellerId,
+                title: 'Stok Tükendi ⚠️',
+                message: `"${item.title}" başlıklı ilanınızın stoğu tükendiği için satıştan kaldırıldı. Satıcı panelinden stoğu güncelleyerek tekrar yayına alabilirsiniz.`,
+                createdAt: new Date().toISOString(),
+                isRead: false
+              });
+            }
+            
+            return {
+              ...item,
+              stock: newStock
+            };
+          }
+        }
+        return item;
+      });
+      
+      saveListingsToLocal(updatedListings);
+      order.items.forEach(oi => {
+        const item = updatedListings.find(l => l.id === oi.listing.id);
+        if (item) saveListingToFirestore(item);
+      });
+
       return {
         orders: [newOrder, ...s.orders],
         chats: s.chats.map(c => c.id === chatId ? { ...c, messages: [...c.messages, newMsg] } : c),
-        notifications: [sNotif, bNotif, ...s.notifications]
+        notifications: [sNotif, bNotif, ...extraNotifications, ...s.notifications],
+        listings: updatedListings
       };
     });
 
@@ -1832,17 +3064,113 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return { orders: updatedOrders };
   }),
 
+  reportIssue: (issue) => set((state) => {
+    const newIssue: CustomerIssue = {
+      ...issue,
+      id: `issue_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    
+    const newIssues = [newIssue, ...state.customerIssues];
+    
+    AsyncStorage.setItem('mezatliyoruz_customer_issues', JSON.stringify(newIssues)).catch(err => console.warn(err));
+    
+    const systemNotif: Notification = {
+      id: `notif_${Date.now()}_issue`,
+      userId: 'admin',
+      title: 'Yeni Müşteri Sorunu Bildirildi ⚠️',
+      message: `Sipariş #${issue.orderId} için "${issue.buyerName}" tarafından sorun bildirildi. Tür: ${issue.issueType}`,
+      createdAt: new Date().toISOString(),
+      isRead: false
+    };
+
+    return {
+      customerIssues: newIssues,
+      notifications: [systemNotif, ...state.notifications]
+    };
+  }),
+
+  updateIssueStatus: (issueId, status, adminNotes) => set((state) => {
+    const updatedIssues = state.customerIssues.map((issue) => {
+      if (issue.id === issueId) {
+        return {
+          ...issue,
+          status,
+          adminNotes: adminNotes !== undefined ? adminNotes : issue.adminNotes
+        };
+      }
+      return issue;
+    });
+
+    AsyncStorage.setItem('mezatliyoruz_customer_issues', JSON.stringify(updatedIssues)).catch(err => console.warn(err));
+
+    const targetIssue = state.customerIssues.find(i => i.id === issueId);
+    if (targetIssue) {
+      const buyerNotif: Notification = {
+        id: `notif_${Date.now()}_issue_update`,
+        userId: targetIssue.buyerId,
+        title: 'Sorun Bildiriminiz Güncellendi ℹ️',
+        message: `Sipariş #${targetIssue.orderId} için açtığınız destek talebi durumu: ${status === 'resolved' ? 'Çözüldü' : status === 'refunded' ? 'Para İadesi Yapıldı' : status === 'rejected' ? 'Reddedildi' : 'İnceleniyor'}. Not: ${adminNotes || ''}`,
+        createdAt: new Date().toISOString(),
+        isRead: false
+      };
+
+      return {
+        customerIssues: updatedIssues,
+        notifications: [buyerNotif, ...state.notifications]
+      };
+    }
+
+    return { customerIssues: updatedIssues };
+  }),
+
   addListing: (newListing) => set((state) => {
+    const listingNumber = String(Math.floor(100000 + Math.random() * 900000));
     const listingWithId: Listing = {
       ...newListing,
       id: `listing_${Date.now()}`,
+      listingNumber,
       liked: false,
       favorited: false,
       favoritesCount: 0,
+      status: 'pending_approval',
     };
+    saveListingToFirestore(listingWithId);
+    const updatedListings = [listingWithId, ...state.listings];
+    saveListingsToLocal(updatedListings);
     return {
-      listings: [listingWithId, ...state.listings]
+      listings: updatedListings
     };
+  }),
+
+  deleteListing: async (listingId) => {
+    set((state) => {
+      const updatedListings = state.listings.filter((l) => l.id !== listingId);
+      saveListingsToLocal(updatedListings);
+      return { listings: updatedListings };
+    });
+    try {
+      const { doc, deleteDoc, getFirestore } = await import('firebase/firestore');
+      const { app } = await import('./firebase');
+      const db = getFirestore(app);
+      await deleteDoc(doc(db, 'listings', listingId));
+    } catch (e) {
+      console.warn('Failed to delete listing from Firestore:', e);
+    }
+  },
+
+  updateListing: (listingId, updatedFields) => set((state) => {
+    const cleanedFields = cleanUndefinedFields(updatedFields);
+    const updatedListings = state.listings.map((l) =>
+      l.id === listingId ? { ...l, ...cleanedFields } : l
+    );
+    const target = updatedListings.find((l) => l.id === listingId);
+    if (target) {
+      saveListingToFirestore(target);
+    }
+    saveListingsToLocal(updatedListings);
+    return { listings: updatedListings };
   }),
 
   addNotification: (notification) => set((state) => {
@@ -1986,34 +3314,66 @@ export const useAppStore = create<StoreState>((set, get) => ({
     savedCards: state.savedCards.filter((c) => c.id !== id)
   })),
 
+  savedAddresses: [
+    {
+      id: 'addr_demo_1',
+      name: 'Ev',
+      receiverName: 'Himmet Akar',
+      receiverPhone: '(545) 579 86 00',
+      city: 'Aydın',
+      district: 'Didim',
+      address: 'Altınkum Mah. 120. Sokak No:12 D:4'
+    }
+  ],
+  addSavedAddress: (address) => set((state) => {
+    const updated = [
+      ...state.savedAddresses,
+      { ...address, id: `addr_${Date.now()}` }
+    ];
+    AsyncStorage.setItem('mezatliyoruz_saved_addresses', JSON.stringify(updated)).catch(err => console.warn(err));
+    return { savedAddresses: updated };
+  }),
+  deleteSavedAddress: (id) => set((state) => {
+    const updated = state.savedAddresses.filter((a) => a.id !== id);
+    AsyncStorage.setItem('mezatliyoruz_saved_addresses', JSON.stringify(updated)).catch(err => console.warn(err));
+    return { savedAddresses: updated };
+  }),
+
   isBiometricsEnabled: false,
   setBiometricsEnabled: (enabled) => set({ isBiometricsEnabled: enabled }),
 
   startWebSocketSim: () => {
-    if (wsBidInterval) return;
-
-    wsBidInterval = setInterval(() => {
-      const state = useAppStore.getState();
-      const activeAuction = state.listings.find(
-        (l) => l.type === 'auction' && l.timeLeft !== undefined && l.timeLeft > 0
-      );
-      if (!activeAuction) return;
-
-      // 30% chance of bid happening on this interval tick
-      if (Math.random() > 0.3) return;
-
-      const increment = 100 + Math.floor(Math.random() * 4) * 100;
-      const botBidAmount = activeAuction.price + increment;
-      const botNames = ['Kemal Yılmaz', 'Ayşe Demir', 'Murat Kaya', 'Selin Aksoy', 'Can Yıldız'];
-      const randomBot = botNames[Math.floor(Math.random() * botNames.length)];
-
-      state.placeBid(activeAuction.id, botBidAmount);
-
-      state.addNotification({
-        userId: 'all',
-        title: `Canlı Teklif! 🔨 (${activeAuction.title})`,
-        message: `${randomBot} adlı kullanıcı yeni bir teklif verdi: ${botBidAmount.toLocaleString('tr-TR')} TL!`
-      });
-    }, 15000);
+    // Disabled simulation for production environment
   }
 }));
+
+export const getListingSeoUrl = (listing: { title: string; listingNumber?: string; id: string }) => {
+  const slugify = (text: string) => {
+    const turkishMap: { [key: string]: string } = {
+      'ç': 'c', 'Ç': 'c',
+      'ğ': 'g', 'Ğ': 'g',
+      'ı': 'i', 'I': 'i', 'İ': 'i',
+      'ö': 'o', 'Ö': 'o',
+      'ş': 's', 'Ş': 's',
+      'ü': 'u', 'Ü': 'u',
+      'â': 'a', 'Â': 'a',
+      'î': 'i', 'Î': 'i',
+      'û': 'u', 'Û': 'u'
+    };
+    return text
+      .toString()
+      .split('')
+      .map(char => turkishMap[char] || char)
+      .join('')
+      .toLowerCase()
+      .replace(/\s+/g, '-')         // Replace spaces with -
+      .replace(/[^\w\-]+/g, '')     // Remove all non-word chars
+      .replace(/\-\-+/g, '-')       // Replace multiple - with single -
+      .replace(/^-+/, '')           // Trim - from start of text
+      .replace(/-+$/, '');          // Trim - from end of text
+  };
+  const titleSlug = slugify(listing.title || 'ilan');
+  const listingNo = listing.listingNumber || listing.id;
+  return `/ilan/${titleSlug}-${listingNo}/detay`;
+};
+

@@ -15,8 +15,8 @@ export const Colors = {
     backgroundElement: '#F0F0F3',
     backgroundSelected: '#E0E1E6',
     textSecondary: '#60646C',
-    gold: '#FF6B00',
-    goldAccent: '#FF6B00',
+    gold: '#0969da',
+    goldAccent: '#0969da',
   },
   dark: {
     text: '#000000',
@@ -24,8 +24,8 @@ export const Colors = {
     backgroundElement: '#F0F0F3',
     backgroundSelected: '#E0E1E6',
     textSecondary: '#60646C',
-    gold: '#FF6B00',
-    goldAccent: '#FF6B00',
+    gold: '#0969da',
+    goldAccent: '#0969da',
   },
 } as const;
 

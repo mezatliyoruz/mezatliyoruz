@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Modal, ScrollView, Pressable, Text, TextInput, Image, Platform, ActivityIndicator, Switch } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, Modal, ScrollView, Pressable, Text, TextInput, Image, Platform, ActivityIndicator, Switch, Alert, FlatList } from 'react-native';
 import { useColorScheme } from 'react-native';
 import { Colors } from '@/constants/theme';
-import { useAppStore } from '@/services/store';
-import { X, ShoppingCart, Trash2, Minus, Plus, ChevronRight, CreditCard, Check } from 'lucide-react-native';
+import { useAppStore, SavedAddress } from '@/services/store';
+import { X, ShoppingCart, Trash2, Minus, Plus, ChevronRight, CreditCard, Check, Truck, MapPin } from 'lucide-react-native';
 import { ThemedView } from './themed-view';
 import { ThemedText } from './themed-text';
 import { PaymentService } from '@/services/payment';
+import { CargoService, CargoOffer } from '@/services/cargo';
+import { TURKEY_CITIES } from '@/constants/cities';
 
 export default function GlobalCartModal() {
   const scheme = useColorScheme();
@@ -27,12 +29,74 @@ export default function GlobalCartModal() {
     savedCards,
     addSavedCard,
     deleteSavedCard,
+    savedAddresses,
+    addSavedAddress,
+    deleteSavedAddress,
   } = useAppStore();
 
   // Shipping Form
   const [shippingName, setShippingName] = useState('');
   const [shippingAddress, setShippingAddress] = useState('');
   const [shippingPhone, setShippingPhone] = useState('');
+  const [shippingCity, setShippingCity] = useState('');
+  const [shippingDistrict, setShippingDistrict] = useState('');
+
+  // Address Saving Form
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [newAddressName, setNewAddressName] = useState('');
+  const [saveAddressSecurely, setSaveAddressSecurely] = useState(true);
+  const [citySearchQuery, setCitySearchQuery] = useState('');
+  const [districtSearchQuery, setDistrictSearchQuery] = useState('');
+  const [cityModalVisible, setCityModalVisible] = useState(false);
+  const [districtModalVisible, setDistrictModalVisible] = useState(false);
+
+  const handleSelectAddress = (addr: SavedAddress) => {
+    setSelectedAddressId(addr.id);
+    setShippingName(addr.receiverName);
+    setShippingPhone(addr.receiverPhone);
+    setShippingCity(addr.city);
+    setShippingDistrict(addr.district);
+    setShippingAddress(addr.address);
+    setCargoOffers([]);
+    setSelectedOffer(null);
+  };
+
+  const handleSelectNewAddress = () => {
+    setSelectedAddressId(null);
+    setShippingName('');
+    setShippingPhone('');
+    setShippingCity('');
+    setShippingDistrict('');
+    setShippingAddress('');
+    setNewAddressName('');
+    setCargoOffers([]);
+    setSelectedOffer(null);
+  };
+
+  // Auto-select first saved address on modal open if available
+  useEffect(() => {
+    if (cartModalVisible && checkoutStep === 'shipping' && savedAddresses && savedAddresses.length > 0 && selectedAddressId === null) {
+      handleSelectAddress(savedAddresses[0]);
+    }
+  }, [cartModalVisible, checkoutStep, savedAddresses]);
+
+  const checkAndSaveAddress = () => {
+    if (selectedAddressId === null && saveAddressSecurely) {
+      addSavedAddress({
+        name: newAddressName.trim() || 'Diğer Adres',
+        receiverName: shippingName,
+        receiverPhone: shippingPhone,
+        city: shippingCity,
+        district: shippingDistrict,
+        address: shippingAddress
+      });
+    }
+  };
+  
+  // Cargo Selection Form
+  const [cargoOffers, setCargoOffers] = useState<CargoOffer[]>([]);
+  const [loadingOffers, setLoadingOffers] = useState(false);
+  const [selectedOffer, setSelectedOffer] = useState<CargoOffer | null>(null);
 
   // Payment Form
   const [cardNumber, setCardNumber] = useState('');
@@ -47,7 +111,7 @@ export default function GlobalCartModal() {
   const [saveCardSecurely, setSaveCardSecurely] = useState(false);
 
   const cartSubtotal = cart.reduce((acc, item) => acc + item.listing.price * item.quantity, 0);
-  const cartTotal = cartSubtotal; // Free shipping
+  const cartTotal = cartSubtotal + (selectedOffer ? selectedOffer.price : 0);
 
   const formatPhoneNumber = (text: string) => {
     const cleaned = text.replace(/\D/g, '').slice(0, 10);
@@ -56,18 +120,50 @@ export default function GlobalCartModal() {
     return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)} ${cleaned.slice(6)}`;
   };
 
+  const handleFetchCargoOffers = async () => {
+    if (!shippingName.trim() || !shippingPhone.trim() || !shippingCity.trim() || !shippingDistrict.trim() || !shippingAddress.trim()) {
+      Alert.alert('Eksik Bilgi', 'Kargo tekliflerini almak için lütfen Adı Soyadı, Telefon, İl, İlçe ve Adres alanlarını doldurun.');
+      return;
+    }
+    setLoadingOffers(true);
+    setFormErrors(prev => { const copy = { ...prev }; delete copy.selectedOffer; return copy; });
+    try {
+      const offers = await CargoService.getOffers({
+        name: shippingName,
+        phone: shippingPhone,
+        city: shippingCity,
+        district: shippingDistrict,
+        address: shippingAddress
+      });
+      // Sort offers cheapest first
+      const sortedOffers = [...offers].sort((a, b) => a.price - b.price);
+      setCargoOffers(sortedOffers);
+      if (sortedOffers.length > 0) {
+        setSelectedOffer(sortedOffers[0]); // Auto-select cheapest offer
+      }
+    } catch (err) {
+      console.warn(err);
+    } finally {
+      setLoadingOffers(false);
+    }
+  };
+
   const handleCheckoutSubmit = async () => {
     const errors: { [key: string]: string } = {};
     if (checkoutStep === 'shipping') {
       if (!shippingName.trim()) errors.shippingName = 'Ad Soyad zorunludur.';
       if (!shippingPhone.trim()) errors.shippingPhone = 'Telefon numarası zorunludur.';
+      if (!shippingCity.trim()) errors.shippingCity = 'İl zorunludur.';
+      if (!shippingDistrict.trim()) errors.shippingDistrict = 'İlçe zorunludur.';
       if (!shippingAddress.trim()) errors.shippingAddress = 'Teslimat adresi zorunludur.';
+      if (!selectedOffer) errors.selectedOffer = 'Lütfen kargo seçeneklerini listeleyin ve bir firma seçin.';
       
       if (Object.keys(errors).length > 0) {
         setFormErrors(errors);
         return;
       }
       setFormErrors({});
+      checkAndSaveAddress(); // Save address if new and checked
       setCheckoutStep('payment');
     } else if (checkoutStep === 'payment') {
       const isSavedCardUsed = selectedCardId !== null;
@@ -144,14 +240,42 @@ export default function GlobalCartModal() {
         }
 
         if (response.success && response.transactionStatus === 'SUCCESS') {
+          // Accept/create shipping transaction on Geliver API
+          let trackingNumber = '';
+          let cargoBarcodeUrl = '';
+          if (selectedOffer) {
+            try {
+              const shipmentResult = await CargoService.createShipmentTransaction(selectedOffer.id, {
+                name: shippingName,
+                phone: shippingPhone,
+                city: shippingCity,
+                district: shippingDistrict,
+                address: shippingAddress,
+              });
+              if (shipmentResult.success) {
+                trackingNumber = shipmentResult.trackingNumber;
+                cargoBarcodeUrl = shipmentResult.labelUrl;
+              }
+            } catch (e) {
+              console.warn('Geliver transaction creation failed:', e);
+            }
+          }
+
           const generatedId = addOrder({
             buyerId: currentUser?.id || 'guest_buyer',
             buyerName: shippingName,
             buyerPhone: shippingPhone,
-            buyerAddress: shippingAddress,
-            sellerName: cart[0]?.listing.sellerName || 'Mega Holding A.Ş.',
+            buyerAddress: `${shippingAddress}, ${shippingDistrict}/${shippingCity}`,
+            sellerName: cart[0]?.listing.sellerName || 'Himmet Akar',
             items: [...cart],
-            totalAmount: cartTotal
+            totalAmount: cartTotal,
+            shippingCompany: selectedOffer?.carrierName,
+            shippingFee: selectedOffer?.price,
+            trackingNumber: trackingNumber || undefined,
+            cargoBarcodeUrl: cargoBarcodeUrl || undefined,
+            senderName: 'Himmet Akar',
+            senderPhone: '05455798600',
+            senderAddress: 'Caferağa Mah. Moda Cad. No:45 Kadıköy, İstanbul',
           });
 
           setOrderId(generatedId || response.orderId || '');
@@ -165,9 +289,13 @@ export default function GlobalCartModal() {
           setCardCvv('');
           setShippingName('');
           setShippingPhone('');
+          setShippingCity('');
+          setShippingDistrict('');
           setShippingAddress('');
           setSelectedCardId(null);
           setSaveCardSecurely(false);
+          setCargoOffers([]);
+          setSelectedOffer(null);
         } else {
           setPaymentError(response.errorMessage || 'Ödeme işlemi başarısız oldu.');
         }
@@ -263,18 +391,18 @@ export default function GlobalCartModal() {
 
                     <View style={[styles.summaryContainer, { backgroundColor: theme.background }]}>
                        <View style={styles.summaryRow}>
-                         <Text style={{ color: theme.textSecondary, fontSize: 13 }}>Ara Toplam</Text>
-                         <Text style={{ color: theme.text, fontSize: 13 }}>{cartSubtotal.toLocaleString('tr-TR')} TL</Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 13 }}>Ara Toplam</Text>
+                          <Text style={{ color: theme.text, fontSize: 13 }}>{cartSubtotal.toLocaleString('tr-TR')} TL</Text>
                        </View>
                        <View style={styles.summaryRow}>
-                         <Text style={{ color: theme.textSecondary, fontSize: 13 }}>Kargo</Text>
-                         <Text style={{ color: '#10B981', fontSize: 13, fontWeight: 'bold' }}>Ücretsiz</Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 13 }}>Kargo</Text>
+                          <Text style={{ color: theme.textSecondary, fontSize: 12, fontStyle: 'italic' }}>Sonraki adımda hesaplanacaktır</Text>
                        </View>
                        <View style={[styles.summaryRow, { marginTop: 8 }]}>
-                         <Text style={{ color: theme.text, fontSize: 15, fontWeight: 'bold' }}>Toplam</Text>
-                         <Text style={{ color: theme.gold, fontSize: 17, fontWeight: 'black' }}>
-                           {cartTotal.toLocaleString('tr-TR')} TL
-                         </Text>
+                          <Text style={{ color: theme.text, fontSize: 15, fontWeight: 'bold' }}>Toplam</Text>
+                          <Text style={{ color: theme.gold, fontSize: 17, fontWeight: 'black' }}>
+                            {cartTotal.toLocaleString('tr-TR')} TL
+                          </Text>
                        </View>
                     </View>
 
@@ -289,6 +417,90 @@ export default function GlobalCartModal() {
 
             {checkoutStep === 'shipping' && (
               <View style={{ gap: 16 }}>
+                {/* Saved Addresses Segment Selector */}
+                {savedAddresses.length > 0 && (
+                  <View style={{ gap: 10, marginBottom: 4 }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.textSecondary }}>KAYITLI ADRESLERİM</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 4 }}>
+                      {savedAddresses.map((addr) => {
+                        const isSelected = addr.id === selectedAddressId;
+                        return (
+                          <Pressable
+                            key={addr.id}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              paddingHorizontal: 12,
+                              paddingVertical: 8,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: isSelected ? theme.gold : theme.backgroundSelected,
+                              backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.12)' : theme.backgroundElement,
+                              gap: 6,
+                            }}
+                            onPress={() => handleSelectAddress(addr)}
+                          >
+                            <MapPin size={12} color={isSelected ? theme.gold : theme.textSecondary} />
+                            <Text style={{ fontSize: 12, fontWeight: 'bold', color: isSelected ? theme.gold : theme.text }}>
+                              {addr.name}
+                            </Text>
+                            {isSelected && (
+                              <Pressable
+                                style={{ marginLeft: 4 }}
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  deleteSavedAddress(addr.id);
+                                  if (savedAddresses.length <= 1) {
+                                    handleSelectNewAddress();
+                                  } else {
+                                    const remaining = savedAddresses.filter(a => a.id !== addr.id);
+                                    handleSelectAddress(remaining[0]);
+                                  }
+                                }}
+                              >
+                                <Trash2 size={12} color="#EF4444" />
+                              </Pressable>
+                            )}
+                          </Pressable>
+                        );
+                      })}
+                      <Pressable
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderStyle: 'dashed',
+                          borderColor: selectedAddressId === null ? theme.gold : theme.textSecondary,
+                          backgroundColor: selectedAddressId === null ? 'rgba(9, 105, 218, 0.05)' : 'transparent',
+                          gap: 6,
+                        }}
+                        onPress={handleSelectNewAddress}
+                      >
+                        <Plus size={12} color={selectedAddressId === null ? theme.gold : theme.textSecondary} />
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: selectedAddressId === null ? theme.gold : theme.textSecondary }}>
+                          Yeni Adres Ekle
+                        </Text>
+                      </Pressable>
+                    </ScrollView>
+                  </View>
+                )}
+
+                {selectedAddressId === null && (
+                  <View style={styles.formGroup}>
+                    <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Adres Başlığı</Text>
+                    <TextInput
+                      style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+                      placeholder="Örn: Ev, İş, Yazlık"
+                      placeholderTextColor={theme.textSecondary}
+                      value={newAddressName}
+                      onChangeText={setNewAddressName}
+                    />
+                  </View>
+                )}
+
                 <View style={styles.formGroup}>
                   <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Adı Soyadı</Text>
                   <TextInput
@@ -324,14 +536,49 @@ export default function GlobalCartModal() {
                   {formErrors.shippingPhone && <Text style={styles.formErrorText}>{formErrors.shippingPhone}</Text>}
                 </View>
 
+                {/* City & District Picker Dropdowns */}
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <View style={[styles.formGroup, { flex: 1 }]}>
+                    <Text style={[styles.formLabel, { color: theme.textSecondary }]}>İl</Text>
+                    <Pressable
+                      style={[styles.formInput, { justifyContent: 'center', borderColor: theme.backgroundSelected }]}
+                      onPress={() => setCityModalVisible(true)}
+                    >
+                      <Text style={{ color: shippingCity ? theme.text : theme.textSecondary, fontSize: 14 }}>
+                        {shippingCity || 'Seçiniz'}
+                      </Text>
+                    </Pressable>
+                    {formErrors.shippingCity && <Text style={styles.formErrorText}>{formErrors.shippingCity}</Text>}
+                  </View>
+
+                  <View style={[styles.formGroup, { flex: 1 }]}>
+                    <Text style={[styles.formLabel, { color: theme.textSecondary }]}>İlçe</Text>
+                    <Pressable
+                      style={[styles.formInput, { justifyContent: 'center', borderColor: theme.backgroundSelected }]}
+                      onPress={() => {
+                        if (!shippingCity) {
+                          Alert.alert('İl Seçilmedi', 'Lütfen önce il seçimi yapınız.');
+                          return;
+                        }
+                        setDistrictModalVisible(true);
+                      }}
+                    >
+                      <Text style={{ color: shippingDistrict ? theme.text : theme.textSecondary, fontSize: 14 }}>
+                        {shippingDistrict || 'Seçiniz'}
+                      </Text>
+                    </Pressable>
+                    {formErrors.shippingDistrict && <Text style={styles.formErrorText}>{formErrors.shippingDistrict}</Text>}
+                  </View>
+                </View>
+
                 <View style={styles.formGroup}>
                   <Text style={[styles.formLabel, { color: theme.textSecondary }]}>Teslimat Adresi</Text>
                   <TextInput
-                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, height: 80, paddingVertical: 10 }]}
-                    placeholder="Adresinizi detaylı giriniz..."
+                    style={[styles.formInput, { color: theme.text, borderColor: theme.backgroundSelected, height: 60, paddingVertical: 10 }]}
+                    placeholder="Mahalle, cadde, sokak ve kapı no yazın..."
                     placeholderTextColor={theme.textSecondary}
                     multiline
-                    numberOfLines={3}
+                    numberOfLines={2}
                     value={shippingAddress}
                     onChangeText={(text) => {
                       setShippingAddress(text);
@@ -341,6 +588,115 @@ export default function GlobalCartModal() {
                     }}
                   />
                   {formErrors.shippingAddress && <Text style={styles.formErrorText}>{formErrors.shippingAddress}</Text>}
+                </View>
+
+                {selectedAddressId === null && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 4 }}>
+                    <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600' }}>Bu adresi teslimat için kaydet</Text>
+                    <Switch
+                      value={saveAddressSecurely}
+                      onValueChange={setSaveAddressSecurely}
+                      trackColor={{ false: isDark ? '#1E293B' : '#E2E8F0', true: theme.gold }}
+                      thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
+                    />
+                  </View>
+                )}
+
+                {/* Cargo Service Selector (Geliver API Integration) */}
+                <View style={{ gap: 8, marginTop: 4, padding: 12, borderRadius: 8, backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : '#F8FAFC', borderWidth: 1, borderColor: theme.backgroundSelected }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: theme.gold }}>🚚 Kargo Seçenekleri (Geliver API)</Text>
+                    {cargoOffers.length > 0 && (
+                      <Pressable onPress={handleFetchCargoOffers} disabled={loadingOffers}>
+                        <Text style={{ fontSize: 11, fontWeight: 'bold', color: theme.gold }}>Yeniden Sorgula</Text>
+                      </Pressable>
+                    )}
+                  </View>
+
+                  {cargoOffers.length === 0 ? (
+                    <View style={{ paddingVertical: 10, alignItems: 'center', gap: 10 }}>
+                      <Text style={{ fontSize: 11, color: theme.textSecondary, textAlign: 'center', lineHeight: 15 }}>
+                        Farklı kargo firmalarının güncel fiyat tekliflerini almak için lütfen adres bilgilerinizi girip sorgulayın.
+                      </Text>
+                      <Pressable 
+                        style={{ height: 34, borderRadius: 6, backgroundColor: theme.gold, paddingHorizontal: 16, justifyContent: 'center', alignItems: 'center' }} 
+                        onPress={handleFetchCargoOffers}
+                        disabled={loadingOffers}
+                      >
+                        {loadingOffers ? (
+                          <ActivityIndicator size="small" color="#000000" />
+                        ) : (
+                          <Text style={{ color: '#000000', fontSize: 12, fontWeight: 'bold' }}>Fiyat Tekliflerini Sorgula</Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      {cargoOffers.map((offer) => {
+                        const isSelected = selectedOffer?.id === offer.id;
+                        return (
+                          <Pressable
+                            key={offer.id}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: 10,
+                              borderRadius: 6,
+                              borderWidth: isSelected ? 1.5 : 1,
+                              borderColor: isSelected ? theme.gold : theme.backgroundSelected,
+                              backgroundColor: isSelected ? (isDark ? 'rgba(9, 105, 218,0.04)' : '#FFFBF7') : theme.background,
+                            }}
+                            onPress={() => setSelectedOffer(offer)}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', padding: 2 }}>
+                                {offer.logo ? (
+                                  <Image source={{ uri: offer.logo }} style={{ width: '100%', height: '100%', resizeMode: 'contain' }} />
+                                ) : (
+                                  <Truck size={16} color="#94A3B8" />
+                                )}
+                              </View>
+                              <View>
+                                <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 12 }}>{offer.carrierName}</Text>
+                                <Text style={{ color: theme.textSecondary, fontSize: 10 }}>Teslimat: {offer.estimatedDelivery}</Text>
+                              </View>
+                            </View>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                              <Text style={{ color: theme.text, fontWeight: 'bold', fontSize: 13 }}>{offer.price} TL</Text>
+                              {isSelected && (
+                                <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: theme.gold, alignItems: 'center', justifyContent: 'center' }}>
+                                  <Check size={10} color="#000000" />
+                                </View>
+                              )}
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                      <Text style={{ fontSize: 10, color: theme.textSecondary, fontStyle: 'italic', marginTop: 2 }}>
+                        * Kargo ücreti alıcı ödemeli olup, kargo firması fiyat teklifleri Geliver entegrasyonu ile çekilmiştir.
+                      </Text>
+                    </View>
+                  )}
+                  {formErrors.selectedOffer && <Text style={styles.formErrorText}>{formErrors.selectedOffer}</Text>}
+                </View>
+
+                {/* Subtotal and Total preview */}
+                <View style={{ gap: 6, paddingHorizontal: 4, borderTopWidth: 0.5, borderTopColor: theme.backgroundSelected, paddingTop: 10 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 12, color: theme.textSecondary }}>Ürün Toplamı ({cart.reduce((acc, item) => acc + item.quantity, 0)} Adet):</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '600', color: theme.text }}>{cartSubtotal.toLocaleString('tr-TR')} TL</Text>
+                  </View>
+                  {selectedOffer && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ fontSize: 12, color: theme.textSecondary }}>Kargo Ücreti ({selectedOffer.carrierName}):</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: theme.text }}>{selectedOffer.price.toLocaleString('tr-TR')} TL</Text>
+                    </View>
+                  )}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: theme.text }}>Kargo Dahil Toplam:</Text>
+                    <Text style={{ fontSize: 15, fontWeight: 'bold', color: theme.gold }}>{cartTotal.toLocaleString('tr-TR')} TL</Text>
+                  </View>
                 </View>
 
                 <View style={styles.formNavigationRow}>
@@ -413,7 +769,7 @@ export default function GlobalCartModal() {
                             borderRadius: 10,
                             borderWidth: 1,
                             borderColor: isSelected ? theme.gold : theme.backgroundSelected,
-                            backgroundColor: isSelected ? (isDark ? 'rgba(255,107,0,0.04)' : '#FFFBF7') : theme.background,
+                            backgroundColor: isSelected ? (isDark ? 'rgba(9, 105, 218,0.04)' : '#FFFBF7') : theme.background,
                           }}
                           onPress={() => setSelectedCardId(savedCard.id)}
                         >
@@ -588,6 +944,45 @@ export default function GlobalCartModal() {
                     <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: 'bold', textAlign: 'center' }}>{paymentError}</Text>
                   </View>
                 )}
+
+                {/* Visa, MasterCard, iyzico Logos Row */}
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 12,
+                  marginTop: 8,
+                  paddingTop: 12,
+                  borderTopWidth: 0.5,
+                  borderTopColor: theme.backgroundSelected,
+                  flexWrap: 'wrap',
+                }}>
+                  {/* Visa */}
+                  <View style={{ borderRadius: 4, overflow: 'hidden', backgroundColor: '#1A1F71', paddingHorizontal: 8, paddingVertical: 4 }}>
+                    <Text style={{ fontWeight: 'bold', fontStyle: 'italic', color: '#FFFFFF', fontSize: 11 }}>
+                      Vi<Text style={{ color: '#F7B600' }}>sa</Text>
+                    </Text>
+                  </View>
+
+                  {/* MasterCard */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', borderRadius: 4, backgroundColor: '#1E293B', paddingHorizontal: 8, paddingVertical: 4, gap: 3 }}>
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#EB001B' }} />
+                    <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#F79E1B', marginLeft: -5, opacity: 0.85 }} />
+                    <Text style={{ color: '#FFFFFF', fontSize: 8, fontWeight: 'bold', marginLeft: 2 }}>mastercard</Text>
+                  </View>
+
+                  {/* iyzico */}
+                  <View style={{ borderRadius: 4, backgroundColor: '#0969da', paddingHorizontal: 8, paddingVertical: 4 }}>
+                    <Text style={{ fontWeight: 'bold', color: '#FFFFFF', fontSize: 10 }}>
+                      iyzico <Text style={{ fontSize: 9, fontWeight: 'normal', opacity: 0.9 }}>ile öde</Text>
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Legal Note */}
+                <Text style={{ fontSize: 10, color: theme.textSecondary, textAlign: 'center', lineHeight: 14, marginBottom: 8 }}>
+                  Ödemeleriniz iyzico güvencesiyle 256-bit SSL korumasıyla tahsil edilmektedir.
+                </Text>
                 
                 <View style={styles.formNavigationRow}>
                   <Pressable 
@@ -619,7 +1014,7 @@ export default function GlobalCartModal() {
 
             {checkoutStep === 'completed' && (
               <View style={styles.successStepContainer}>
-                <View style={[styles.successIconCircle, { borderColor: theme.gold, backgroundColor: 'rgba(255, 107, 0, 0.08)' }]}>
+                <View style={[styles.successIconCircle, { borderColor: theme.gold, backgroundColor: 'rgba(9, 105, 218, 0.08)' }]}>
                   <ShoppingCart size={40} color={theme.gold} />
                 </View>
                 <ThemedText style={styles.successTitle}>Siparişiniz Başarıyla Alındı!</ThemedText>
@@ -640,6 +1035,116 @@ export default function GlobalCartModal() {
           </ScrollView>
         </ThemedView>
       </View>
+
+      {/* City Picker Modal */}
+      <Modal
+        visible={cityModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCityModalVisible(false)}
+      >
+        <View style={styles.pickerModalBackdrop}>
+          <ThemedView type="backgroundElement" style={styles.pickerModalContent}>
+            <View style={styles.pickerModalHeader}>
+              <Text style={[styles.pickerModalTitle, { color: theme.text }]}>İl Seçin</Text>
+              <Pressable onPress={() => setCityModalVisible(false)}>
+                <X size={20} color={theme.text} />
+              </Pressable>
+            </View>
+            <TextInput
+              style={[styles.pickerSearchInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+              placeholder="İl ara..."
+              placeholderTextColor={theme.textSecondary}
+              value={citySearchQuery}
+              onChangeText={setCitySearchQuery}
+            />
+            <FlatList
+              data={Object.keys(TURKEY_CITIES).filter(city => 
+                city.toLowerCase().replace('i', 'ı').includes(citySearchQuery.toLowerCase().replace('i', 'ı'))
+              )}
+              keyExtractor={(item) => item}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.pickerItem,
+                    { borderBottomColor: theme.backgroundSelected },
+                    pressed && { backgroundColor: theme.backgroundSelected }
+                  ]}
+                  onPress={() => {
+                    setShippingCity(item);
+                    setShippingDistrict(''); // Reset district
+                    setCitySearchQuery('');
+                    setCityModalVisible(false);
+                    if (formErrors.shippingCity) {
+                      setFormErrors(prev => { const copy = { ...prev }; delete copy.shippingCity; return copy; });
+                    }
+                  }}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>{item}</Text>
+                </Pressable>
+              )}
+              style={{ maxHeight: 300 }}
+            />
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* District Picker Modal */}
+      <Modal
+        visible={districtModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDistrictModalVisible(false)}
+      >
+        <View style={styles.pickerModalBackdrop}>
+          <ThemedView type="backgroundElement" style={styles.pickerModalContent}>
+            <View style={styles.pickerModalHeader}>
+              <Text style={[styles.pickerModalTitle, { color: theme.text }]}>İlçe Seçin ({shippingCity})</Text>
+              <Pressable onPress={() => setDistrictModalVisible(false)}>
+                <X size={20} color={theme.text} />
+              </Pressable>
+            </View>
+            <TextInput
+              style={[styles.pickerSearchInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+              placeholder="İlçe ara..."
+              placeholderTextColor={theme.textSecondary}
+              value={districtSearchQuery}
+              onChangeText={setDistrictSearchQuery}
+            />
+            <FlatList
+              data={(TURKEY_CITIES[shippingCity] || []).filter(dist => 
+                dist.toLowerCase().replace('i', 'ı').includes(districtSearchQuery.toLowerCase().replace('i', 'ı'))
+              )}
+              keyExtractor={(item) => item}
+              renderItem={({ item }) => (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.pickerItem,
+                    { borderBottomColor: theme.backgroundSelected },
+                    pressed && { backgroundColor: theme.backgroundSelected }
+                  ]}
+                  onPress={() => {
+                    setShippingDistrict(item);
+                    setDistrictSearchQuery('');
+                    setDistrictModalVisible(false);
+                    if (formErrors.shippingDistrict) {
+                      setFormErrors(prev => { const copy = { ...prev }; delete copy.shippingDistrict; return copy; });
+                    }
+                  }}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14 }}>{item}</Text>
+                </Pressable>
+              )}
+              ListEmptyComponent={
+                <Text style={{ color: theme.textSecondary, textAlign: 'center', marginVertical: 20, fontSize: 12 }}>
+                  {shippingCity ? 'Bu ile ait ilçe bulunamadı.' : 'Lütfen önce il seçin.'}
+                </Text>
+              }
+              style={{ maxHeight: 300 }}
+            />
+          </ThemedView>
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -648,16 +1153,16 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   modalContent: {
     width: '100%',
     maxWidth: 500,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
+    borderRadius: 12,
     padding: 24,
-    borderTopWidth: 1,
+    borderWidth: 1,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -852,7 +1357,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: 'rgba(255, 85, 0, 0.08)',
+    backgroundColor: 'rgba(9, 105, 218, 0.08)',
     borderWidth: 2,
     justifyContent: 'center',
     alignItems: 'center',
@@ -889,5 +1394,44 @@ const styles = StyleSheet.create({
   successContinueBtnText: {
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  pickerModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  pickerModalContent: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 12,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  pickerModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  pickerModalTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  pickerSearchInput: {
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    marginBottom: 12,
+    backgroundColor: 'rgba(255,255,255,0.01)',
+  },
+  pickerItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderBottomWidth: 0.5,
   },
 });

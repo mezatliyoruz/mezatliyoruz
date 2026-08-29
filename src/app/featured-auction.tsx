@@ -311,7 +311,7 @@ export default function FeaturedAuctionScreen() {
       {/* Admin Floating Publish Bar */}
       {currentUser?.role === 'super_admin' && (
         <View style={styles.adminFloatingBar}>
-          <Sparkles size={14} color="#FF6B00" style={{ marginRight: 6 }} />
+          <Sparkles size={14} color="#0969da" style={{ marginRight: 6 }} />
           <Text style={styles.adminBarText}>Müzayede Taslak Modu</Text>
           <Pressable style={styles.adminPublishBtn} onPress={handlePublishAuction}>
             <Text style={styles.adminPublishBtnText}>Müzayedeyi Yayınla</Text>
@@ -343,7 +343,7 @@ export default function FeaturedAuctionScreen() {
         <Pressable 
           style={styles.backButton} 
           onPress={() => {
-            router.push('/');
+            router.back();
           }}
         >
           <ArrowLeft size={20} color="#F8FAFC" />
@@ -375,11 +375,11 @@ export default function FeaturedAuctionScreen() {
 
           <View style={styles.eventInfoRow}>
             <View style={styles.infoPill}>
-              <Calendar size={14} color="#FF6B00" />
+              <Calendar size={14} color="#0969da" />
               <Text style={styles.infoPillText}>Bugün 12:00</Text>
             </View>
             <View style={styles.infoPill}>
-              <Gavel size={14} color="#FF6B00" />
+              <Gavel size={14} color="#0969da" />
               <Text style={styles.infoPillText}>{activeAuction.vehicles.length} Eser Mevcut</Text>
             </View>
           </View>
@@ -788,7 +788,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: 6,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 4,
@@ -1022,7 +1022,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#0F172A',
     borderWidth: 1.5,
-    borderColor: '#FF5500',
+    borderColor: '#0969da',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 6,
@@ -1031,12 +1031,12 @@ const styles = StyleSheet.create({
   },
   adminBarText: {
     fontSize: 12,
-    color: '#FF5500',
+    color: '#0969da',
     fontWeight: 'bold',
     flex: 1,
   },
   adminPublishBtn: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 4,
@@ -1050,7 +1050,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 4,
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 8,
@@ -1080,7 +1080,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 8,
     padding: 24,
     borderTopWidth: 1.5,
-    borderTopColor: '#FF5500',
+    borderTopColor: '#0969da',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1110,7 +1110,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   submitButton: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     height: 44,
     borderRadius: 6,
     flexDirection: 'row',
@@ -1124,7 +1124,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   addVehicleBtn: {
-    backgroundColor: '#FF5500',
+    backgroundColor: '#0969da',
     flexDirection: 'row',
     height: 44,
     borderRadius: 6,

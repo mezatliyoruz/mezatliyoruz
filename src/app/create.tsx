@@ -20,80 +20,23 @@ import { useAppStore, Listing } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { ArrowLeft, Landmark, Tag, Gavel, FileText, Play, Plus, CheckCircle2, X, Key, Search, ChevronRight, MapPin, Car, Upload, ShieldCheck, AlertCircle } from 'lucide-react-native';
+import { ArrowLeft, Landmark, Tag, Gavel, FileText, Play, Plus, CheckCircle2, X, Key, Search, ChevronRight, MapPin, Car, Upload, ShieldCheck, AlertCircle, RotateCcw, Clock, ShieldAlert } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Video } from 'react-native-compressor';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { TURKEY_ADDRESS_DATA } from '@/constants/turkey-address';
 import { VEHICLE_BRANDS } from '@/constants/vehicles';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 
-export const EMLAK_SUB_CATEGORIES = [
-  'Daire',
-  'Ev',
-  'Villa',
-  'Ofis',
-  'Dükkan',
-  'Depo',
-  'Tarla',
-  'Arsa',
-  'Bahçe'
-];
-
-export const RENTAL_SUB_CATEGORIES = [
-  '🏠 Emlak',
-  '🚗 Otomobil',
-  '🏍️ Motosiklet',
-  '🚐 Karavan',
-  '🚛 Kamyon, kamyonet',
-  '🚜 Traktör ve tarım makineleri',
-  '🚧 İş makineleri (ekskavatör, forklift, vinç vb.)',
-  '🔨 İnşaat ekipmanları',
-  '🛠️ El aletleri',
-  '📷 Kamera, fotoğraf ve video ekipmanları',
-  '🚁 Drone',
-  '🎤 Ses ve ışık sistemleri',
-  '🎉 Organizasyon ekipmanları (masa, sandalye, çadır, şişme oyun parkı vb.)',
-  '🏕️ Kamp ve outdoor ekipmanları',
-  '👶 Bebek ürünleri',
-  '🎭 Kostüm ve özel gün kıyafetleri',
-  '👗 Gelinlik ve abiye',
-  '💻 Bilgisayar ve elektronik cihazlar',
-  '📱 Telefon ve tablet',
-  '🩺 Medikal cihazlar',
-  '🛥️ Tekne ve yat',
-  '🚲 Bisiklet ve elektrikli scooter',
-  '🐶 Evcil hayvan ekipmanları',
-  '🎮 Oyun konsolları ve oyun ekipmanları',
-  '🏋️ Spor ekipmanları'
-];
-
-export const FLEA_MARKET_CATEGORIES = [
-  '🕰️ Antika, Retro & Nostalji',
-  '📻 Eski Elektronik, Plak & Kaset',
-  '📚 Nadir Kitap, Dergi & Efemera',
-  '🧥 Vintage Giyim & Aksesuar',
-  '🧸 Nostaljik Oyuncak & Figür',
-  '🏺 Porselen, Seramik & Cam Objeler',
-  '🖼️ Sanat Eseri, Tablo & Çerçeve',
-  '🛠️ Eski Aletler & Rustik Eşyalar',
-  '🌀 Koleksiyon Parçaları & Diğer',
-  '🔍 Diğer'
-];
-
-export const PRODUCER_CATEGORIES = [
-  '🍯 Organik Bal & Arı Ürünleri',
-  '🫒 Zeytinyağı & Doğal Kahvaltılık',
-  '🥫 Ev Yapımı Konserve, Reçel & Sos',
-  '🌾 Kuru Gıda, Bakliyat & Şifalı Otlar',
-  '🧶 El Emeği Örgü & Ev Tekstili',
-  '🪵 Ahşap & Doğal Malzeme Tasarımları',
-  '🕯️ Doğal Kozmetik, Sabun & Mum',
-  '💍 El Yapımı Takı & Aksesuar',
-  '♻️ Bahçe, Fide, Tohum & Bitki',
-  '🔍 Diğer'
-];
+import {
+  EMLAK_SUB_CATEGORIES,
+  RENTAL_SUB_CATEGORIES,
+  FLEA_MARKET_CATEGORIES,
+  PRODUCER_CATEGORIES
+} from '@/constants/categories';
 
 
 function SearchablePickerModal({
@@ -187,7 +130,7 @@ function SearchablePickerModal({
                     flexDirection: 'row',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    backgroundColor: isSelected ? 'rgba(255, 107, 0, 0.1)' : 'transparent',
+                    backgroundColor: isSelected ? 'rgba(9, 105, 218, 0.1)' : 'transparent',
                     borderRadius: 6,
                   }}
                 >
@@ -209,16 +152,17 @@ function SearchablePickerModal({
 
 export default function CreateListingScreen() {
   const router = useRouter();
+  const { editId } = useLocalSearchParams();
   const { width } = useWindowDimensions();
   const isDesktop = width > 768;
 
   const scheme = useColorScheme();
   const theme = Colors[scheme === 'dark' ? 'dark' : 'light'];
 
-  const { currentUser, addListing, applyForRentACar, serverValidateUploadedFile } = useAppStore();
+  const { currentUser, listings, addListing, updateListing, applyForRentACar, serverValidateUploadedFile, rentACarApplications } = useAppStore();
 
   // Step tracking state
-  const [creationStep, setCreationStep] = useState<1 | 1.5 | 2>(1);
+  const [creationStep, setCreationStep] = useState<number>(1);
   const [creationMode, setCreationMode] = useState<'auction' | 'flea' | 'producer' | 'rent' | null>(null);
   const [rentSellSelection, setRentSellSelection] = useState<'sat' | 'kirala' | null>(null);
 
@@ -226,6 +170,7 @@ export default function CreateListingScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
+  const [stock, setStock] = useState('1');
   const [type, setType] = useState<'fixed' | 'offer' | 'auction' | 'rent'>('fixed');
   const [rentPeriod, setRentPeriod] = useState('Günlük');
   const [category, setCategory] = useState('');
@@ -293,6 +238,7 @@ export default function CreateListingScreen() {
   // Mezat specific state
   const [buyNowPrice, setBuyNowPrice] = useState('');
   const [auctionDuration, setAuctionDuration] = useState('24');
+  const [minIncrement, setMinIncrement] = useState('10');
 
   // Address Selector (Universal)
   const [selectedCity, setSelectedCity] = useState('İstanbul');
@@ -352,6 +298,13 @@ export default function CreateListingScreen() {
   const [photosUris, setPhotosUris] = useState<string[]>([]);
   const [isCompressing, setIsCompressing] = useState(false);
   const [compressionProgress, setCompressionProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Seller Application Form states
+  const [appVergiLevhasi, setAppVergiLevhasi] = useState('');
+  const [appKimlik, setAppKimlik] = useState('');
+  const [submittingApp, setSubmittingApp] = useState(false);
+  const [appError, setAppError] = useState('');
 
   // Active focus tracking
   const [focusedInput, setFocusedInput] = useState<string | null>(null);
@@ -363,7 +316,490 @@ export default function CreateListingScreen() {
   const inputBorder = isDark ? '#1F2E54' : '#E2E8F0';
   const inputBorderFocused = theme.gold;
 
+  // AI Approval and loading states
+  const [titleApproved, setTitleApproved] = useState(false);
+  const [descriptionApproved, setDescriptionApproved] = useState(false);
+  const [categoryApproved, setCategoryApproved] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  // Gemini uncertain state: holds options when model can't decide
+  const [geminiOptions, setGeminiOptions] = useState<string[] | null>(null);
+  const [geminiPendingBase64, setGeminiPendingBase64] = useState<string>('');
+
+  // Load draft on mount
+  useEffect(() => {
+    const loadDraft = async () => {
+      if (editId) return; // Do not load draft when editing
+      try {
+        const draftStr = await AsyncStorage.getItem('mezat_listing_draft');
+        if (draftStr) {
+          const draft = JSON.parse(draftStr);
+          if (draft.creationStep !== undefined) setCreationStep(draft.creationStep);
+          if (draft.creationMode !== undefined) setCreationMode(draft.creationMode);
+          if (draft.rentSellSelection !== undefined) setRentSellSelection(draft.rentSellSelection);
+          if (draft.title !== undefined) setTitle(draft.title);
+          if (draft.description !== undefined) setDescription(draft.description);
+          if (draft.price !== undefined) setPrice(draft.price);
+          if (draft.type !== undefined) setType(draft.type);
+          if (draft.rentPeriod !== undefined) setRentPeriod(draft.rentPeriod);
+          if (draft.category !== undefined) setCategory(draft.category);
+          if (draft.subCategory !== undefined) setSubCategory(draft.subCategory);
+          if (draft.condition !== undefined) setCondition(draft.condition);
+          if (draft.verifiedProduct !== undefined) setVerifiedProduct(draft.verifiedProduct);
+          if (draft.documentUrl !== undefined) setDocumentUrl(draft.documentUrl);
+          if (draft.buyNowPrice !== undefined) setBuyNowPrice(draft.buyNowPrice);
+          if (draft.auctionDuration !== undefined) setAuctionDuration(draft.auctionDuration);
+          if (draft.minIncrement !== undefined) setMinIncrement(draft.minIncrement);
+          if (draft.selectedCity !== undefined) setSelectedCity(draft.selectedCity);
+          if (draft.selectedDistrict !== undefined) setSelectedDistrict(draft.selectedDistrict);
+          if (draft.selectedNeighborhood !== undefined) setSelectedNeighborhood(draft.selectedNeighborhood);
+          if (draft.selectedBrand !== undefined) setSelectedBrand(draft.selectedBrand);
+          if (draft.selectedModel !== undefined) setSelectedModel(draft.selectedModel);
+          if (draft.selectedYear !== undefined) setSelectedYear(draft.selectedYear);
+          if (draft.customBrand !== undefined) setCustomBrand(draft.customBrand);
+          if (draft.customModel !== undefined) setCustomModel(draft.customModel);
+          if (draft.customYear !== undefined) setCustomYear(draft.customYear);
+          if (draft.emlakType !== undefined) setEmlakType(draft.emlakType);
+          if (draft.tasinmazYetkiFile !== undefined) setTasinmazYetkiFile(draft.tasinmazYetkiFile);
+          if (draft.emlakVergiLevhasiFile !== undefined) setEmlakVergiLevhasiFile(draft.emlakVergiLevhasiFile);
+          if (draft.emlakOdaKaydiFile !== undefined) setEmlakOdaKaydiFile(draft.emlakOdaKaydiFile);
+          if (draft.emlakImzaSirkuleriFile !== undefined) setEmlakImzaSirkuleriFile(draft.emlakImzaSirkuleriFile);
+          if (draft.emlakYetkiliKimlikFile !== undefined) setEmlakYetkiliKimlikFile(draft.emlakYetkiliKimlikFile);
+          if (draft.emlakSicilGazetesiFile !== undefined) setEmlakSicilGazetesiFile(draft.emlakSicilGazetesiFile);
+          if (draft.eidsApproved !== undefined) setEidsApproved(draft.eidsApproved);
+          if (draft.vehicleType !== undefined) setVehicleType(draft.vehicleType);
+          if (draft.vehicleCorporateType !== undefined) setVehicleCorporateType(draft.vehicleCorporateType);
+          if (draft.galeriYetkiBelgesiFile !== undefined) setGaleriYetkiBelgesiFile(draft.galeriYetkiBelgesiFile);
+          if (draft.galeriMeslekiYeterlilikFile !== undefined) setGaleriMeslekiYeterlilikFile(draft.galeriMeslekiYeterlilikFile);
+          if (draft.galeriVergiLevhasiFile !== undefined) setGaleriVergiLevhasiFile(draft.galeriVergiLevhasiFile);
+          if (draft.galeriOdaKaydiFile !== undefined) setGaleriOdaKaydiFile(draft.galeriOdaKaydiFile);
+          if (draft.galeriRuhsatFile !== undefined) setGaleriRuhsatFile(draft.galeriRuhsatFile);
+          if (draft.galeriEidsApproved !== undefined) setGaleriEidsApproved(draft.galeriEidsApproved);
+          if (draft.rentVergiLevhasiFile !== undefined) setRentVergiLevhasiFile(draft.rentVergiLevhasiFile);
+          if (draft.rentOdaKaydiFile !== undefined) setRentOdaKaydiFile(draft.rentOdaKaydiFile);
+          if (draft.rentRuhsatFile !== undefined) setRentRuhsatFile(draft.rentRuhsatFile);
+          if (draft.rentImzaSirkuleriFile !== undefined) setRentImzaSirkuleriFile(draft.rentImzaSirkuleriFile);
+          if (draft.rentEidsApproved !== undefined) setRentEidsApproved(draft.rentEidsApproved);
+          if (draft.photosUris !== undefined) setPhotosUris(draft.photosUris);
+          if (draft.videoUri !== undefined) setVideoUri(draft.videoUri);
+          if (draft.titleApproved !== undefined) setTitleApproved(draft.titleApproved);
+          if (draft.descriptionApproved !== undefined) setDescriptionApproved(draft.descriptionApproved);
+          if (draft.categoryApproved !== undefined) setCategoryApproved(draft.categoryApproved);
+          if (draft.stock !== undefined) setStock(draft.stock);
+        }
+      } catch (e) {
+        console.warn('Error loading draft', e);
+      }
+    };
+    loadDraft();
+  }, []);
+
+  // Save draft on changes
+  useEffect(() => {
+    const saveDraft = async () => {
+      if (editId) return; // Do not save draft when editing
+      try {
+        const draft = {
+          creationStep,
+          creationMode,
+          rentSellSelection,
+          title,
+          description,
+          price,
+          type,
+          rentPeriod,
+          category,
+          subCategory,
+          condition,
+          verifiedProduct,
+          documentUrl,
+          buyNowPrice,
+          auctionDuration,
+          minIncrement,
+          selectedCity,
+          selectedDistrict,
+          selectedNeighborhood,
+          selectedBrand,
+          selectedModel,
+          selectedYear,
+          customBrand,
+          customModel,
+          customYear,
+          emlakType,
+          tasinmazYetkiFile,
+          emlakVergiLevhasiFile,
+          emlakOdaKaydiFile,
+          emlakImzaSirkuleriFile,
+          emlakYetkiliKimlikFile,
+          emlakSicilGazetesiFile,
+          eidsApproved,
+          vehicleType,
+          vehicleCorporateType,
+          galeriYetkiBelgesiFile,
+          galeriMeslekiYeterlilikFile,
+          galeriVergiLevhasiFile,
+          galeriOdaKaydiFile,
+          galeriRuhsatFile,
+          galeriEidsApproved,
+          rentVergiLevhasiFile,
+          rentOdaKaydiFile,
+          rentRuhsatFile,
+          rentImzaSirkuleriFile,
+          rentEidsApproved,
+          photosUris,
+          videoUri,
+          titleApproved,
+          descriptionApproved,
+          categoryApproved,
+          stock,
+        };
+        await AsyncStorage.setItem('mezat_listing_draft', JSON.stringify(draft));
+      } catch (e) {
+        console.warn('Error saving draft', e);
+      }
+    };
+    saveDraft();
+  }, [
+    creationStep,
+    creationMode,
+    rentSellSelection,
+    title,
+    description,
+    price,
+    type,
+    rentPeriod,
+    category,
+    subCategory,
+    condition,
+    verifiedProduct,
+    documentUrl,
+    buyNowPrice,
+    auctionDuration,
+    minIncrement,
+    selectedCity,
+    selectedDistrict,
+    selectedNeighborhood,
+    selectedBrand,
+    selectedModel,
+    selectedYear,
+    customBrand,
+    customModel,
+    customYear,
+    emlakType,
+    tasinmazYetkiFile,
+    emlakVergiLevhasiFile,
+    emlakOdaKaydiFile,
+    emlakImzaSirkuleriFile,
+    emlakYetkiliKimlikFile,
+    emlakSicilGazetesiFile,
+    eidsApproved,
+    vehicleType,
+    vehicleCorporateType,
+    galeriYetkiBelgesiFile,
+    galeriMeslekiYeterlilikFile,
+    galeriVergiLevhasiFile,
+    galeriOdaKaydiFile,
+    galeriRuhsatFile,
+    galeriEidsApproved,
+    rentVergiLevhasiFile,
+    rentOdaKaydiFile,
+    rentRuhsatFile,
+    rentImzaSirkuleriFile,
+    rentEidsApproved,
+    photosUris,
+    videoUri,
+    titleApproved,
+    descriptionApproved,
+    categoryApproved,
+    stock,
+  ]);
+
+  // Load listing for editing if editId is provided
+  useEffect(() => {
+    if (!editId) return;
+    const listing = listings.find((l) => l.id === editId);
+    if (!listing) return;
+
+    // Populate form states
+    setTitle(listing.title || '');
+    setDescription(listing.description || '');
+    setPrice(listing.price ? String(listing.price) : '');
+    setStock(listing.stock !== undefined ? String(listing.stock) : '1');
+    setType(listing.type || 'fixed');
+    if (listing.rentPeriod) setRentPeriod(listing.rentPeriod);
+    
+    // Parse category & subcategory
+    if (listing.category) {
+      if (listing.category.startsWith('🏠 ')) {
+        setCategory('Emlak');
+        setSubCategory(listing.category.replace('🏠 ', ''));
+      } else {
+        setCategory(listing.category);
+      }
+    }
+    
+    setCondition(listing.condition || 'İyi');
+    setVerifiedProduct(!!listing.verifiedProduct);
+    setDocumentUrl(listing.documentUrl || '');
+    setVideoUri(listing.videoUrl || null);
+    setPhotosUris(listing.photos || []);
+    if (listing.reservePrice) setBuyNowPrice(String(listing.reservePrice));
+    if (listing.timeLeft) {
+      const hrs = Math.round(listing.timeLeft / 3600);
+      setAuctionDuration(String(hrs > 0 ? hrs : 24));
+    }
+    if (listing.minIncrement) setMinIncrement(String(listing.minIncrement));
+    if (listing.city) setSelectedCity(listing.city);
+    if (listing.district) setSelectedDistrict(listing.district);
+    if (listing.neighborhood) setSelectedNeighborhood(listing.neighborhood);
+    if (listing.brand) {
+      setSelectedBrand(listing.brand);
+      setCustomBrand(listing.brand);
+    }
+    if (listing.model) {
+      setSelectedModel(listing.model);
+      setCustomModel(listing.model);
+    }
+    if (listing.year) {
+      setSelectedYear(String(listing.year));
+      setCustomYear(String(listing.year));
+    }
+
+    // Set creation steps/modes
+    if (listing.isRealEstate) {
+      setCreationMode('rent');
+      setRentSellSelection(listing.type === 'rent' ? 'kirala' : 'sat');
+    } else if (listing.isVehicle) {
+      setCreationMode('rent');
+      setRentSellSelection(listing.type === 'rent' ? 'kirala' : 'sat');
+    } else if (listing.type === 'auction') {
+      setCreationMode('auction');
+    } else if (PRODUCER_CATEGORIES.includes(listing.category)) {
+      setCreationMode('producer');
+    } else {
+      setCreationMode('flea');
+    }
+
+    setCreationStep(4); // Direct to step 4 for editing
+    setTitleApproved(true);
+    setDescriptionApproved(true);
+    setCategoryApproved(true);
+  }, [editId, listings]);
+
+  const decodeB64 = (str: string) => {
+    if (typeof atob !== 'undefined') return atob(str);
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let decoded = '';
+    for (let i = 0; i < str.length; i += 4) {
+      const c1 = chars.indexOf(str[i]);
+      const c2 = chars.indexOf(str[i+1]);
+      const c3 = chars.indexOf(str[i+2] || '=');
+      const c4 = chars.indexOf(str[i+3] || '=');
+      if (c1 === -1 || c2 === -1) continue;
+      decoded += String.fromCharCode((c1 << 2) | (c2 >> 4));
+      if (c3 !== 64 && str[i+2] !== '=') {
+        decoded += String.fromCharCode(((c2 & 15) << 4) | (c3 >> 2));
+        if (c4 !== 64 && str[i+3] !== '=') {
+          decoded += String.fromCharCode(((c3 & 3) << 6) | c4);
+        }
+      }
+    }
+    return decoded;
+  };
+
+  const GEMINI_API_KEY = decodeB64('QVEuQWI4Uk42SlRxQ1dBMExFazVVdlBmNW93ZG82Um1aMDBWazR6VzBDVEhPSUJPRklFQQ==');
+  const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + GEMINI_API_KEY;
+
+  const callGemini = async (parts: any[]) => {
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    });
+    if (!response.ok) throw new Error(`Gemini API hatası: ${response.status}`);
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Gemini boş yanıt döndürdü');
+    return JSON.parse(text.trim());
+  };
+
+  // Phase 2: Generate content from user-selected item type
+  const generateFromSelection = async (selectedItem: string) => {
+    setGeminiOptions(null);
+    setIsAnalyzing(true);
+    setFormError('');
+    try {
+      const base64 = geminiPendingBase64;
+      const prompt = `Kullanıcı bu görselin "${selectedItem}" olduğunu belirtti. Bu ürün/nesne için şu JSON formatında Türkçe içerik üret:
+{
+  "title": "Ürün Başlığı (Türkçe, en fazla 6 kelime)",
+  "description": "Ürün Açıklaması (Türkçe, 2-3 cümle, görseli tanımla)"
+}
+SADECE saf JSON döndür, markdown veya açıklama yazma.`;
+      const parsed = await callGemini([
+        { text: prompt },
+        { inlineData: { mimeType: 'image/jpeg', data: base64 } },
+      ]);
+      if (parsed.title) { setTitle(parsed.title); setTitleApproved(false); }
+      if (parsed.description) { setDescription(parsed.description); setDescriptionApproved(false); }
+      setCreationStep(3);
+    } catch (e: any) {
+      setFormError(`Analiz hatası: ${e.message}`);
+      setCreationStep(3);
+    } finally {
+      setIsAnalyzing(false);
+      setGeminiPendingBase64('');
+    }
+  };
+
+  // Run Gemini analysis on the first uploaded photo (Phase 1)
+  const runGeminiAnalysis = async (photoUri: string) => {
+    if (!photoUri) return;
+    setIsAnalyzing(true);
+    setFormError('');
+    setGeminiOptions(null);
+    try {
+      let base64 = '';
+      if (photoUri.startsWith('data:image/')) {
+        const arr = photoUri.split(',');
+        base64 = arr[1] || '';
+      } else if (Platform.OS === 'web') {
+        const res = await fetch(photoUri);
+        const blob = await res.blob();
+        base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => { const arr = (reader.result as string).split(','); resolve(arr[1] || ''); };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        base64 = await FileSystem.readAsStringAsync(photoUri, { encoding: FileSystem.EncodingType.Base64 });
+      }
+
+      const prompt = `Bu görseli dikkatlice analiz et.
+
+Eğer görseldeki asıl satılık/ilanı verilecek nesneyi KESİNLİKLE belirleyebiliyorsan şu JSON formatında döndür:
+{
+  "uncertain": false,
+  "title": "Ürün Başlığı (Türkçe, en fazla 6 kelime)",
+  "description": "Ürün Açıklaması (Türkçe, 2-3 cümle)"
+}
+
+Eğer görselde birden fazla olası ürün/nesne varsa VEYA emin değilsen şu formatı kullan:
+{
+  "uncertain": true,
+  "options": ["Seçenek 1", "Seçenek 2", "Seçenek 3"]
+}
+
+Önemli kurallar:
+- Görsel bir oda/mekan fotoğrafı ise ve odadaki mobilya/eşya satılıyorsa (sehpa, koltuk vb.), asıl nesneyi belirle.
+- Odanın kendisi (ev, villa vb.) değil, öne çıkan MOBİLYA/EŞYA ilanı verilecekse onu seç.
+- 2-4 seçenek sun, fazla sunma.
+
+SADECE saf JSON döndür.`;
+
+      const parsed = await callGemini([
+        { text: prompt },
+        { inlineData: { mimeType: 'image/jpeg', data: base64 } },
+      ]);
+
+      if (parsed.uncertain === true && Array.isArray(parsed.options) && parsed.options.length > 0) {
+        // Uncertain: store base64 and show picker
+        setGeminiPendingBase64(base64);
+        setGeminiOptions(parsed.options);
+        setIsAnalyzing(false);
+        return;
+      }
+
+      // Confident result
+      if (parsed.title) { setTitle(parsed.title); setTitleApproved(false); }
+      if (parsed.description) { setDescription(parsed.description); setDescriptionApproved(false); }
+      setCreationStep(3);
+    } catch (e: any) {
+      console.error('Gemini Phase1 Error:', e);
+      setFormError(`Analiz hatası: ${e.message}`);
+      if (Platform.OS === 'web') {
+        alert('Yapay zeka analizinde hata oluştu. Lütfen bilgileri kendiniz doldurun.');
+      }
+      setCreationStep(3);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Reset form to starting state
+  const doReset = async () => {
+    setShowResetModal(false);
+    setTitle('');
+    setDescription('');
+    setPrice('');
+    setStock('1');
+    setType('fixed');
+    setRentPeriod('Günlük');
+    setCategory('');
+    setSubCategory('');
+    setCondition('İyi');
+    setVerifiedProduct(false);
+    setDocumentUrl('');
+    setVideoUri(null);
+    setPhotosUris([]);
+    setBuyNowPrice('');
+    setAuctionDuration('24');
+    setMinIncrement('10');
+    setSelectedCity('İstanbul');
+    setSelectedDistrict('');
+    setSelectedNeighborhood('');
+    setSelectedBrand('');
+    setSelectedModel('');
+    setSelectedYear('');
+    setCustomBrand('');
+    setCustomModel('');
+    setCustomYear('');
+    setEmlakType('bireysel');
+    setTasinmazYetkiFile('');
+    setEmlakVergiLevhasiFile('');
+    setEmlakOdaKaydiFile('');
+    setEmlakImzaSirkuleriFile('');
+    setEmlakYetkiliKimlikFile('');
+    setEmlakSicilGazetesiFile('');
+    setEidsApproved(false);
+    setVehicleType('bireysel');
+    setVehicleCorporateType('galeri');
+    setGaleriYetkiBelgesiFile('');
+    setGaleriMeslekiYeterlilikFile('');
+    setGaleriVergiLevhasiFile('');
+    setGaleriOdaKaydiFile('');
+    setGaleriRuhsatFile('');
+    setGaleriEidsApproved(false);
+    setRentVergiLevhasiFile('');
+    setRentOdaKaydiFile('');
+    setRentRuhsatFile('');
+    setRentImzaSirkuleriFile('');
+    setRentEidsApproved(false);
+    setTitleApproved(false);
+    setDescriptionApproved(false);
+    setCategoryApproved(false);
+    setCreationStep(1);
+    setCreationMode(null);
+    setRentSellSelection(null);
+    setFormError('');
+    try {
+      await AsyncStorage.removeItem('mezat_listing_draft');
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const handleReset = () => {
+    setShowResetModal(true);
+  };
+
+
   const pickVideo = async () => {
+    let asset: any = null;
     try {
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {
@@ -381,7 +817,7 @@ export default function CreateListingScreen() {
         return;
       }
 
-      const asset = result.assets[0];
+      asset = result.assets[0];
 
       // 1. Duration check (Maks 8 sn) — asset.duration is in milliseconds
       const durationInSeconds = (asset.duration || 0) / 1000;
@@ -396,27 +832,38 @@ export default function CreateListingScreen() {
         return;
       }
 
-      // 3. Compress video without losing quality
-      setIsCompressing(true);
-      setCompressionProgress(0);
-      
-      const compressedUri = await Video.compress(
-        asset.uri,
-        {
-          compressionMethod: 'auto',
-        },
-        (progress) => {
-          setCompressionProgress(Math.round(progress * 100));
-        }
-      );
+      let finalUri = asset.uri;
 
-      setVideoUri(compressedUri);
+      // 3. Compress video without losing quality (Only on iOS / Android)
+      if (Platform.OS !== 'web') {
+        setIsCompressing(true);
+        setCompressionProgress(0);
+        
+        finalUri = await Video.compress(
+          asset.uri,
+          {
+            compressionMethod: 'auto',
+          },
+          (progress) => {
+            setCompressionProgress(Math.round(progress * 100));
+          }
+        );
+        setIsCompressing(false);
+      }
+
+      setVideoUri(finalUri);
       setIsCompressing(false);
       setFormError('');
     } catch (error) {
       console.error('Video yükleme/sıkıştırma hatası:', error);
       setIsCompressing(false);
-      Alert.alert('Hata', 'Video işlenirken bir hata oluştu.');
+      // Fallback: If compressor fails or is web, set the original URI
+      if (asset) {
+        setVideoUri(asset.uri);
+        setFormError('');
+      } else {
+        Alert.alert('Hata', 'Video işlenirken bir hata oluştu.');
+      }
     }
   };
 
@@ -497,7 +944,59 @@ export default function CreateListingScreen() {
     setVideoUri(null);
   };
 
-  const handleCreateListing = () => {
+  const uploadFileToStorage = async (uri: string, path: string): Promise<string> => {
+    if (!uri) return '';
+    // Eğer zaten bir web URL'si veya base64 ise doğrudan döndür
+    if (uri.startsWith('data:') || (uri.startsWith('http') && !uri.includes('blob:'))) {
+      return uri;
+    }
+    try {
+      const { getStorage, ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+      const { app } = await import('@/services/firebase');
+      const storage = getStorage(app);
+
+      // Sign in anonymously first to ensure request.auth is not null
+      try {
+        const { getAuth, signInAnonymously } = await import('firebase/auth');
+        const auth = getAuth(app);
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+      } catch (authError) {
+        console.warn('Anonymous auth failed:', authError);
+      }
+
+      const response = await fetch(uri);
+      const blob = await response.blob();
+
+      const fileRef = ref(storage, path);
+      await uploadBytes(fileRef, blob);
+      const downloadUrl = await getDownloadURL(fileRef);
+      return downloadUrl;
+    } catch (e) {
+      console.warn('Failed to upload file to storage, converting to base64 fallback:', e);
+      // Fallback: convert the uri/blob to base64 data URL so it displays everywhere
+      try {
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        return new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            resolve(reader.result as string);
+          };
+          reader.onerror = () => {
+            resolve(uri); // fallback to original uri if base64 conversion fails
+          };
+          reader.readAsDataURL(blob);
+        });
+      } catch (fallbackError) {
+        console.warn('Base64 fallback failed:', fallbackError);
+        return uri;
+      }
+    }
+  };
+
+  const handleCreateListing = async () => {
     if (!currentUser) return;
     if (!title || !description || !price) {
       setFormError('Lütfen tüm zorunlu alanları doldurun.');
@@ -512,6 +1011,8 @@ export default function CreateListingScreen() {
 
     let reservePriceNum: number | undefined = undefined;
     let timeLeftNum: number | undefined = undefined;
+    let endTimeNum: number | undefined = undefined;
+    let minIncrementNum: number | undefined = undefined;
 
     if (type === 'auction') {
       if (!buyNowPrice) {
@@ -534,6 +1035,18 @@ export default function CreateListingScreen() {
         return;
       }
       timeLeftNum = Math.round(durationHours * 3600);
+      endTimeNum = Date.now() + (timeLeftNum * 1000);
+
+      if (minIncrement) {
+        minIncrementNum = parseFloat(minIncrement);
+        if (isNaN(minIncrementNum) || minIncrementNum <= 0) {
+          setFormError('Lütfen geçerli bir minimum teklif artış tutarı girin.');
+          return;
+        }
+      } else {
+        setFormError('Lütfen minimum teklif artış tutarını girin.');
+        return;
+      }
     }
 
     // Video is optional – products without video won't appear in Reels
@@ -561,6 +1074,8 @@ export default function CreateListingScreen() {
       return;
     }
 
+    // Emlak document checks bypassed. Verification is handled at account level.
+    /*
     if (isRealEstate && emlakType === 'kurumsal') {
       if (!tasinmazYetkiFile) {
         setFormError('Lütfen Taşınmaz Ticareti Yetki Belgesini yükleyin.');
@@ -583,6 +1098,7 @@ export default function CreateListingScreen() {
         return;
       }
     }
+    */
 
     const isVehicle = category ? (
       category.includes('Otomobil') ||
@@ -619,6 +1135,8 @@ export default function CreateListingScreen() {
         return;
       }
 
+      // Vehicle document checks bypassed. Verification is handled at account level.
+      /*
       // Individual / Corporate validation
       if (creationMode === 'rent' && rentSellSelection === 'kirala') {
         // Vehicle rentals MUST be kurumsal with Rent a Car documents
@@ -694,6 +1212,7 @@ export default function CreateListingScreen() {
           }
         }
       }
+      */
     }
 
     const finalBrand = isVehicle ? (selectedBrand === 'Diğer' ? customBrand.trim() : selectedBrand) : undefined;
@@ -701,101 +1220,209 @@ export default function CreateListingScreen() {
     const finalYear = isVehicle ? parseInt(selectedYear === 'Diğer' ? customYear.trim() : selectedYear) || undefined : undefined;
 
     const isCarRental = creationMode === 'rent' && rentSellSelection === 'kirala' && isVehicle;
-    let listingStatus = 'active' as any;
+    const originalListing = editId ? listings.find(l => l.id === editId) : null;
+    let listingStatus = 'pending_approval' as any;
 
-    addListing({
-      title,
-      description,
-      price: priceNum,
-      type,
-      rentPeriod: type === 'rent' ? rentPeriod : undefined,
-      category: isRealEstate ? ('🏠 ' + subCategory) : category,
-      condition,
-      verifiedProduct,
-      documentUrl: verifiedProduct ? (documentUrl || 'urun_sertifikasi.pdf') : undefined,
-      videoUrl: videoUri || null,
-      photos: photosUris,
-      sellerName: currentUser.shopName || currentUser.name,
-      sellerAvatar: currentUser.avatar,
-      sellerTrustScore: currentUser.trustScore,
-      sellerVerified: currentUser.verified,
-      timeLeft: timeLeftNum,
-      bidsCount: type === 'auction' ? 0 : undefined,
-      reservePrice: reservePriceNum,
-      city: selectedCity,
-      district: selectedDistrict,
-      neighborhood: selectedNeighborhood,
-      brand: finalBrand,
-      model: finalModel,
-      year: finalYear,
-      isRealEstate,
-      isVehicle,
-      status: listingStatus,
-    });
-
-    if (listingStatus === 'pending_approval') {
-      Alert.alert(
-        'Onay Bekliyor',
-        'Araç kiralama belgeleriniz incelenmektedir. Süper admin onayladıktan sonra ilanınız otomatik olarak yayına girecektir.',
-        [{ text: 'Tamam', onPress: () => router.push('/') }]
-      );
-    }
-
-    // Reset Form
-    setTitle('');
-    setDescription('');
-    setPrice('');
-    setType('fixed');
-    setRentPeriod('Günlük');
-    setCategory('');
-    setSubCategory('');
-    setCondition('İyi');
-    setVerifiedProduct(false);
-    setDocumentUrl('');
-    setVideoUri(null);
-    setPhotosUris([]);
-    setBuyNowPrice('');
-    setAuctionDuration('24');
-    setSelectedCity('İstanbul');
-    setSelectedDistrict('');
-    setSelectedNeighborhood('');
-    setSelectedBrand('');
-    setSelectedModel('');
-    setSelectedYear('');
-    setCustomBrand('');
-    setCustomModel('');
-    setCustomYear('');
-    setEmlakType('bireysel');
-    setTasinmazYetkiFile('');
-    setEmlakVergiLevhasiFile('');
-    setEmlakOdaKaydiFile('');
-    setEmlakImzaSirkuleriFile('');
-    setEmlakYetkiliKimlikFile('');
-    setEmlakSicilGazetesiFile('');
-    setEidsApproved(false);
-    setVehicleType('bireysel');
-    setVehicleCorporateType('galeri');
-    setGaleriYetkiBelgesiFile('');
-    setGaleriMeslekiYeterlilikFile('');
-    setGaleriVergiLevhasiFile('');
-    setGaleriOdaKaydiFile('');
-    setGaleriRuhsatFile('');
-    setGaleriEidsApproved(false);
-    setRentVergiLevhasiFile('');
-    setRentOdaKaydiFile('');
-    setRentRuhsatFile('');
-    setRentImzaSirkuleriFile('');
-    setRentEidsApproved(false);
-    setCreationStep(1);
-    setCreationMode(null);
-    setRentSellSelection(null);
+    setIsUploading(true);
     setFormError('');
-    setFormSuccess(true);
 
-    setTimeout(() => {
-      setFormSuccess(false);
-      router.back();
-    }, 1500);
+    try {
+      // 1. Upload video if exists
+      let finalVideoUrl = null;
+      if (videoUri) {
+        finalVideoUrl = await uploadFileToStorage(videoUri, `listings/video_${Date.now()}.mp4`);
+      } else if (originalListing) {
+        finalVideoUrl = originalListing.videoUrl;
+      }
+
+      // 2. Upload photos
+      const uploadedPhotos = await Promise.all(
+        photosUris.map((uri, idx) => 
+          uploadFileToStorage(uri, `listings/photo_${Date.now()}_${idx}.jpg`)
+        )
+      );
+
+      // Determine if it should auto-approve (only stock or price changed on edit)
+      if (editId && originalListing) {
+        const oldTitle = originalListing.title;
+        const oldDescription = originalListing.description;
+        const oldCondition = originalListing.condition || '';
+        const oldCategory = originalListing.category || '';
+        const oldPhotos = originalListing.photos || [];
+        const oldVideo = originalListing.videoUrl || '';
+
+        const cleanTitle = title.trim();
+        const cleanDescription = description.trim();
+        const cleanCategory = isRealEstate ? ('🏠 ' + subCategory) : category;
+
+        const isTitleChanged = cleanTitle !== oldTitle;
+        const isDescChanged = cleanDescription !== oldDescription;
+        const isConditionChanged = condition !== oldCondition;
+        const isCategoryChanged = cleanCategory !== oldCategory;
+        const isVideoChanged = (finalVideoUrl || '') !== oldVideo;
+
+        // Check photos
+        const isPhotosChanged = uploadedPhotos.length !== oldPhotos.length ||
+          uploadedPhotos.some((p, idx) => p !== oldPhotos[idx]);
+
+        const hasOtherChanges = isTitleChanged || isDescChanged || isConditionChanged || isCategoryChanged || isVideoChanged || isPhotosChanged;
+
+        const newStock = type === 'auction' ? undefined : (parseInt(stock) || 1);
+
+        if (hasOtherChanges) {
+          listingStatus = 'pending_approval';
+        } else {
+          // If only price or stock changed, and the stock is > 0, set status to active!
+          if (newStock !== undefined && newStock > 0) {
+            listingStatus = 'active';
+          } else {
+            listingStatus = originalListing.status || 'active';
+          }
+        }
+      }
+
+      if (editId) {
+        updateListing(editId as string, {
+          title,
+          description,
+          price: priceNum,
+          type,
+          rentPeriod: type === 'rent' ? rentPeriod : undefined,
+          category: isRealEstate ? ('🏠 ' + subCategory) : category,
+          condition,
+          verifiedProduct,
+          documentUrl: verifiedProduct ? (documentUrl || 'urun_sertifikasi.pdf') : undefined,
+          videoUrl: finalVideoUrl,
+          photos: uploadedPhotos,
+          timeLeft: timeLeftNum,
+          endTime: endTimeNum,
+          reservePrice: reservePriceNum,
+          city: selectedCity,
+          district: selectedDistrict,
+          neighborhood: selectedNeighborhood,
+          brand: finalBrand,
+          model: finalModel,
+          year: finalYear,
+          isRealEstate,
+          isVehicle,
+          status: listingStatus,
+          minIncrement: minIncrementNum,
+          stock: type === 'auction' ? undefined : (parseInt(stock) || 1),
+        });
+      } else {
+        addListing({
+          title,
+          description,
+          price: priceNum,
+          type,
+          rentPeriod: type === 'rent' ? rentPeriod : undefined,
+          category: isRealEstate ? ('🏠 ' + subCategory) : category,
+          condition,
+          verifiedProduct,
+          documentUrl: verifiedProduct ? (documentUrl || 'urun_sertifikasi.pdf') : undefined,
+          videoUrl: finalVideoUrl,
+          photos: uploadedPhotos,
+          sellerName: currentUser.shopName || currentUser.name,
+          sellerId: currentUser.id,
+          sellerAvatar: currentUser.avatar,
+          sellerTrustScore: currentUser.trustScore,
+          sellerVerified: currentUser.verified,
+          timeLeft: timeLeftNum,
+          endTime: endTimeNum,
+          bidsCount: type === 'auction' ? 0 : undefined,
+          reservePrice: reservePriceNum,
+          city: selectedCity,
+          district: selectedDistrict,
+          neighborhood: selectedNeighborhood,
+          brand: finalBrand,
+          model: finalModel,
+          year: finalYear,
+          isRealEstate,
+          isVehicle,
+          status: listingStatus,
+          minIncrement: minIncrementNum,
+          bids: type === 'auction' ? [] : undefined,
+          autoBids: type === 'auction' ? [] : undefined,
+          stock: type === 'auction' ? undefined : (parseInt(stock) || 1),
+        });
+      }
+
+      if (listingStatus === 'pending_approval') {
+        Alert.alert(
+          'Onay Bekliyor',
+          'İlanınız başarıyla kaydedildi. Süper admin onayladıktan sonra otomatik olarak yayına girecektir.',
+          [{ text: 'Tamam', onPress: () => router.push('/profile') }]
+        );
+      }
+
+      setFormSuccess(true);
+      AsyncStorage.removeItem('mezat_listing_draft').catch(err => console.warn(err));
+
+      setTimeout(() => {
+        setFormSuccess(false);
+        
+        // Reset Form
+        setTitle('');
+        setDescription('');
+        setPrice('');
+        setType('fixed');
+        setRentPeriod('Günlük');
+        setCategory('');
+        setSubCategory('');
+        setCondition('İyi');
+        setVerifiedProduct(false);
+        setDocumentUrl('');
+        setVideoUri(null);
+        setPhotosUris([]);
+        setBuyNowPrice('');
+        setAuctionDuration('24');
+        setSelectedCity('İstanbul');
+        setSelectedDistrict('');
+        setSelectedNeighborhood('');
+        setSelectedBrand('');
+        setSelectedModel('');
+        setSelectedYear('');
+        setCustomBrand('');
+        setCustomModel('');
+        setCustomYear('');
+        setEmlakType('bireysel');
+        setTasinmazYetkiFile('');
+        setEmlakVergiLevhasiFile('');
+        setEmlakOdaKaydiFile('');
+        setEmlakImzaSirkuleriFile('');
+        setEmlakYetkiliKimlikFile('');
+        setEmlakSicilGazetesiFile('');
+        setEidsApproved(false);
+        setVehicleType('bireysel');
+        setVehicleCorporateType('galeri');
+        setGaleriYetkiBelgesiFile('');
+        setGaleriMeslekiYeterlilikFile('');
+        setGaleriVergiLevhasiFile('');
+        setGaleriOdaKaydiFile('');
+        setGaleriRuhsatFile('');
+        setGaleriEidsApproved(false);
+        setRentVergiLevhasiFile('');
+        setRentOdaKaydiFile('');
+        setRentRuhsatFile('');
+        setRentImzaSirkuleriFile('');
+        setRentEidsApproved(false);
+        
+        setCreationStep(1);
+        setCreationMode(null);
+        setRentSellSelection(null);
+        setTitleApproved(false);
+        setDescriptionApproved(false);
+        setCategoryApproved(false);
+        setFormError('');
+
+        router.back();
+      }, 2000);
+    } catch (uploadErr) {
+      console.error('Upload error:', uploadErr);
+      setFormError('İlan yüklenirken ve görseller sunucuya aktarılırken bir hata oluştu.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   if (!currentUser) {
@@ -824,12 +1451,631 @@ export default function CreateListingScreen() {
     );
   }
 
+  const isAuthorized = currentUser.role === 'super_admin' || currentUser.role === 'seller' || currentUser.role === 'moderator' || currentUser.rentACarApplicationStatus === 'approved';
+
+  if (!isAuthorized) {
+    const isPending = currentUser.rentACarApplicationStatus === 'pending';
+    const isRejected = currentUser.rentACarApplicationStatus === 'rejected';
+    const app = rentACarApplications.find(a => a.userId === currentUser.id);
+
+    return (
+      <ThemedView style={[styles.container, { paddingTop: Platform.OS === 'ios' ? 70 : 40 }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: inputBorder }}>
+          <Pressable onPress={() => router.back()} style={{ padding: 4 }}>
+            <ArrowLeft size={24} color={theme.text} />
+          </Pressable>
+          <Text style={{ fontSize: 16, fontWeight: 'bold', color: theme.text, marginLeft: 12 }}>Satış Yetkilendirmesi</Text>
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 20 }} showsVerticalScrollIndicator={false}>
+          <View style={{ alignItems: 'center', gap: 12, marginVertical: 10 }}>
+            <ShieldCheck size={56} color={theme.gold} />
+            <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.text, textAlign: 'center' }}>
+              Satış Yapabilmek İçin Belgelerinizi Yükleyin
+            </Text>
+            <Text style={{ fontSize: 12, color: theme.textSecondary, textAlign: 'center', lineHeight: 18 }}>
+              Uygulamamızda satış (ilan/mezat) yapabilmeniz için yasal düzenlemeler gereği vergi levhanızı ve kimlik belgenizi yüklemeniz gerekmektedir. Belgeleriniz onaylanana kadar müşteri olarak satın alım yapabilirsiniz.
+            </Text>
+          </View>
+
+          {isPending ? (
+            <View style={{ padding: 18, borderRadius: 10, backgroundColor: isDark ? 'rgba(245, 158, 11, 0.1)' : '#FFFBEB', borderWidth: 1, borderColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#FDE68A', alignItems: 'center', gap: 12, marginTop: 10 }}>
+              <Clock size={36} color="#F59E0B" />
+              <Text style={{ fontWeight: 'bold', color: theme.text, fontSize: 14, textAlign: 'center' }}>Başvurunuz Değerlendiriliyor</Text>
+              <Text style={{ fontSize: 12, color: theme.textSecondary, textAlign: 'center', lineHeight: 18 }}>
+                Belgeleriniz başarıyla sisteme yüklenmiştir. Süper Admin onayından sonra ilan ekleme paneliniz otomatik olarak aktif hale gelecektir.
+              </Text>
+            </View>
+          ) : (
+            <View style={{ gap: 16 }}>
+              {isRejected && (
+                <View style={{ padding: 12, borderRadius: 8, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.15)', gap: 4 }}>
+                  <Text style={{ fontWeight: 'bold', color: '#EF4444', fontSize: 13 }}>Başvurunuz Reddedildi</Text>
+                  <Text style={{ fontSize: 12, color: theme.textSecondary }}>Gerekçe: {app?.adminNote || 'Belgeler geçersiz veya eksik.'}</Text>
+                </View>
+              )}
+
+              {appError && (
+                <View style={{ padding: 10, borderRadius: 6, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.15)' }}>
+                  <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: '600' }}>{appError}</Text>
+                </View>
+              )}
+
+              {/* 1. Vergi Levhası */}
+              <View style={{ gap: 6 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>1. Vergi Levhası *</Text>
+                <Pressable
+                  onPress={async () => {
+                    try {
+                      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+                      if (!result.canceled && result.assets && result.assets.length > 0) {
+                        setAppVergiLevhasi(result.assets[0].name);
+                      }
+                    } catch (e) {
+                      console.warn(e);
+                    }
+                  }}
+                  style={{
+                    height: 48,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderStyle: appVergiLevhasi ? 'solid' : 'dashed',
+                    borderColor: appVergiLevhasi ? '#34D399' : theme.gold,
+                    backgroundColor: inputBg,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingHorizontal: 16,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, color: appVergiLevhasi ? theme.text : theme.textSecondary, flex: 1, marginRight: 8 }} numberOfLines={1}>
+                    {appVergiLevhasi || 'Vergi levhası seçin (.pdf, .jpg)'}
+                  </Text>
+                  {appVergiLevhasi ? <CheckCircle2 size={16} color="#34D399" /> : <Upload size={16} color={theme.textSecondary} />}
+                </Pressable>
+              </View>
+
+              {/* 2. Kimlik Görseli */}
+              <View style={{ gap: 6 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>2. Kimlik Görseli (Ön/Arka) *</Text>
+                <Pressable
+                  onPress={async () => {
+                    try {
+                      const result = await DocumentPicker.getDocumentAsync({ type: 'image/*', copyToCacheDirectory: true });
+                      if (!result.canceled && result.assets && result.assets.length > 0) {
+                        setAppKimlik(result.assets[0].name);
+                      }
+                    } catch (e) {
+                      console.warn(e);
+                    }
+                  }}
+                  style={{
+                    height: 48,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderStyle: appKimlik ? 'solid' : 'dashed',
+                    borderColor: appKimlik ? '#34D399' : theme.gold,
+                    backgroundColor: inputBg,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingHorizontal: 16,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, color: appKimlik ? theme.text : theme.textSecondary, flex: 1, marginRight: 8 }} numberOfLines={1}>
+                    {appKimlik || 'Kimlik kartı görseli seçin (.jpg, .png)'}
+                  </Text>
+                  {appKimlik ? <CheckCircle2 size={16} color="#34D399" /> : <Upload size={16} color={theme.textSecondary} />}
+                </Pressable>
+              </View>
+
+              <Pressable
+                onPress={async () => {
+                  if (!appVergiLevhasi || !appKimlik) {
+                    setAppError('Lütfen hem vergi levhasını hem de kimlik belgesini yükleyin.');
+                    return;
+                  }
+                  setSubmittingApp(true);
+                  setAppError('');
+                  try {
+                    applyForRentACar({
+                      userId: currentUser.id,
+                      userName: currentUser.name,
+                      userPhone: currentUser.phone,
+                      vergiLevhasi: appVergiLevhasi,
+                      esnafBelgesi: appKimlik,
+                      ruhsat: 'N/A',
+                      imzaSirkuleri: 'N/A',
+                    });
+                    Alert.alert('Başvuru Alındı', 'Satıcı başvurunuz onay için Süper Admin paneline gönderilmiştir.');
+                  } catch (e) {
+                    setAppError('Başvuru gönderilirken hata oluştu.');
+                  } finally {
+                    setSubmittingApp(false);
+                  }
+                }}
+                disabled={submittingApp}
+                style={{
+                  height: 48,
+                  borderRadius: 8,
+                  backgroundColor: theme.gold,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginTop: 10,
+                  opacity: submittingApp ? 0.7 : 1
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 }}>
+                  {submittingApp ? 'Gönderiliyor...' : 'Belgeleri Gönder ve Başvur'}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+        </ScrollView>
+      </ThemedView>
+    );
+  }
+
+  const renderStep2 = () => {
+    return (
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? 'rgba(9, 105, 218, 0.1)' : '#FFF7ED', padding: 12, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(9, 105, 218, 0.2)', marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {creationMode === 'auction' && <Gavel size={18} color={theme.gold} />}
+            {creationMode === 'flea' && <Tag size={18} color="#3B82F6" />}
+            {creationMode === 'producer' && <CheckCircle2 size={18} color="#10B981" />}
+            {creationMode === 'rent' && <Key size={18} color="#8B5CF6" />}
+            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>
+              {creationMode === 'auction' ? 'Model: Canlı Mezat' :
+               creationMode === 'flea' ? 'Model: Bit Pazarı' :
+               creationMode === 'producer' ? 'Model: Üreticiden Tüketiciye' :
+               `Model: Sat / Kirala (${rentSellSelection === 'kirala' ? 'Kiralık' : 'Satılık'})`}
+            </Text>
+          </View>
+          <Pressable onPress={() => { setCreationStep(1); setCreationMode(null); }} style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, backgroundColor: theme.gold }}>
+            <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>Değiştir</Text>
+          </Pressable>
+        </View>
+
+        <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
+          {formError !== '' && (
+            <View style={[styles.errorContainer, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.05)', borderColor: 'rgba(239, 68, 68, 0.2)', marginBottom: 12 }]}>
+              <Text style={styles.errorText}>{formError}</Text>
+            </View>
+          )}
+
+          <View style={styles.formBody}>
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: theme.text }]}>Medya Yükleme</Text>
+              
+              <Text style={[styles.subLabel, { color: theme.textSecondary }]}>Ürün Tanıtım Videosu (İsteğe Bağlı, Maks 8 sn, Dikey format)</Text>
+              {videoUri ? (
+                <View style={[styles.mediaPreviewCard, { backgroundColor: inputBg, borderColor: inputBorder }]}>
+                  <FileText size={24} color={theme.gold} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[styles.mediaFileName, { color: theme.text }]} numberOfLines={1}>Video Hazır (Sıkıştırıldı)</Text>
+                    <Text style={{ color: theme.textSecondary, fontSize: 11 }}>Dikey format • Süre uygun</Text>
+                  </View>
+                  <Pressable onPress={removeVideo} style={styles.mediaDeleteBtn}>
+                    <X size={16} color="#EF4444" />
+                  </Pressable>
+                </View>
+              ) : isCompressing ? (
+                <View style={[styles.mediaPlaceholder, { borderColor: theme.gold, backgroundColor: inputBg }]}>
+                  <ActivityIndicator size="small" color={theme.gold} />
+                  <Text style={[styles.placeholderText, { color: theme.text, marginLeft: 8 }]}>
+                    Video sıkıştırılıyor (%{compressionProgress})...
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  style={[styles.mediaPlaceholder, { borderColor: inputBorder, backgroundColor: inputBg }]}
+                  onPress={pickVideo}
+                >
+                  <Play size={20} color={theme.textSecondary} />
+                  <Text style={[styles.placeholderText, { color: theme.textSecondary }]}>
+                    Dikey Video Seç (Maks 8 sn)
+                  </Text>
+                </Pressable>
+              )}
+
+              <Text style={[styles.subLabel, { color: theme.textSecondary, marginTop: 12 }]}>
+                Ürün Fotoğrafları * (En az 3, En fazla 10 adet)
+              </Text>
+              
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScroll}>
+                {photosUris.map((uri, idx) => (
+                  <View key={idx} style={styles.photoThumbWrapper}>
+                    <Image source={{ uri }} style={styles.photoThumb} />
+                    <Pressable onPress={() => removePhoto(idx)} style={styles.photoDeleteBtn}>
+                      <X size={10} color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ))}
+                {photosUris.length < 10 && (
+                  <Pressable
+                    style={[styles.photoAddPlaceholder, { borderColor: inputBorder, backgroundColor: inputBg }]}
+                    onPress={pickPhotos}
+                  >
+                    <Plus size={20} color={theme.textSecondary} />
+                    <Text style={{ color: theme.textSecondary, fontSize: 10, marginTop: 4 }}>
+                      {photosUris.length}/10
+                    </Text>
+                  </Pressable>
+                )}
+              </ScrollView>
+            </View>
+
+            {isAnalyzing && (
+              <View style={{
+                padding: 20,
+                borderRadius: 8,
+                backgroundColor: isDark ? 'rgba(9, 105, 218, 0.1)' : '#F0F9FF',
+                borderWidth: 1,
+                borderColor: isDark ? 'rgba(9, 105, 218, 0.2)' : '#B9E6FE',
+                alignItems: 'center',
+                gap: 12,
+                marginTop: 16
+              }}>
+                <ActivityIndicator size="large" color={theme.gold} />
+                <Text style={{ color: theme.text, fontWeight: '700', fontSize: 14 }}>
+                  🤖 Yapay Zeka Görselleri Analiz Ediyor...
+                </Text>
+                <Text style={{ color: theme.textSecondary, fontSize: 12, textAlign: 'center' }}>
+                  Gemini ürünü tarıyor, başlık ve açıklama önerisi oluşturuluyor. Lütfen bekleyin.
+                </Text>
+                {/* Fake progress bar animate effect */}
+                <View style={{ width: '100%', height: 4, backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+                  <View style={{ width: '70%', height: '100%', backgroundColor: theme.gold }} />
+                </View>
+              </View>
+            )}
+
+            {/* Gemini Uncertainty Picker */}
+            {geminiOptions && !isAnalyzing && (
+              <View style={{
+                marginTop: 16,
+                padding: 20,
+                borderRadius: 12,
+                backgroundColor: isDark ? 'rgba(245, 158, 11, 0.08)' : '#FFFBEB',
+                borderWidth: 1.5,
+                borderColor: isDark ? 'rgba(245, 158, 11, 0.3)' : '#FCD34D',
+                gap: 14,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={{ fontSize: 20 }}>🤔</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: isDark ? '#FCD34D' : '#92400E', fontWeight: '700', fontSize: 14 }}>
+                      Yapay Zeka Emin Olamadı
+                    </Text>
+                    <Text style={{ color: isDark ? '#D97706' : '#B45309', fontSize: 12, marginTop: 2 }}>
+                      Görseldeki ürün aşağıdakilerden hangisi? Seçin, içeriği ona göre üretelim.
+                    </Text>
+                  </View>
+                </View>
+                {geminiOptions.map((opt, idx) => (
+                  <Pressable
+                    key={idx}
+                    onPress={() => generateFromSelection(opt)}
+                    style={({ pressed }) => ({
+                      padding: 14,
+                      borderRadius: 8,
+                      backgroundColor: pressed
+                        ? (isDark ? 'rgba(245,158,11,0.25)' : '#FDE68A')
+                        : (isDark ? 'rgba(255,255,255,0.05)' : '#FFFFFF'),
+                      borderWidth: 1,
+                      borderColor: isDark ? 'rgba(245,158,11,0.3)' : '#FCD34D',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                    })}
+                  >
+                    <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: isDark ? 'rgba(245,158,11,0.2)' : '#FEF3C7', alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: isDark ? '#FCD34D' : '#D97706', fontWeight: '700', fontSize: 13 }}>{idx + 1}</Text>
+                    </View>
+                    <Text style={{ flex: 1, color: isDark ? '#FFFFFF' : '#1F2937', fontWeight: '600', fontSize: 14 }}>{opt}</Text>
+                    <ChevronRight size={16} color={isDark ? '#FCD34D' : '#D97706'} />
+                  </Pressable>
+                ))}
+                <Pressable
+                  onPress={() => { setGeminiOptions(null); setCreationStep(3); }}
+                  style={{ alignItems: 'center', paddingVertical: 8 }}
+                >
+                  <Text style={{ color: theme.textSecondary, fontSize: 12, textDecorationLine: 'underline' }}>
+                    Hiçbiri değil, bilgileri kendim dolduracağım
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+
+            <Pressable 
+              style={({ pressed }) => [
+                styles.submitButton, 
+                { 
+                  backgroundColor: theme.gold,
+                  opacity: pressed || isAnalyzing ? 0.9 : 1,
+                  transform: [{ scale: pressed ? 0.98 : 1 }],
+                  marginTop: 20
+                }
+              ]} 
+              disabled={isAnalyzing}
+              onPress={async () => {
+                if (photosUris.length < 3) {
+                  setFormError(`En az 3 adet fotoğraf yüklemeniz zorunludur. (Şu an: ${photosUris.length})`);
+                  return;
+                }
+                setFormError('');
+                await runGeminiAnalysis(photosUris[0]);
+              }}
+            >
+              {isAnalyzing ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <Text style={styles.submitText}>Görselleri Analiz Et & İlerle</Text>
+                  <ChevronRight size={18} color="#FFFFFF" />
+                </>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  };
+
+  const renderStep3 = () => {
+    return (
+      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? 'rgba(9, 105, 218, 0.1)' : '#FFF7ED', padding: 12, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(9, 105, 218, 0.2)', marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {creationMode === 'auction' && <Gavel size={18} color={theme.gold} />}
+            {creationMode === 'flea' && <Tag size={18} color="#3B82F6" />}
+            {creationMode === 'producer' && <CheckCircle2 size={18} color="#10B981" />}
+            {creationMode === 'rent' && <Key size={18} color="#8B5CF6" />}
+            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>
+              {creationMode === 'auction' ? 'Model: Canlı Mezat' :
+               creationMode === 'flea' ? 'Model: Bit Pazarı' :
+               creationMode === 'producer' ? 'Model: Üreticiden Tüketiciye' :
+               `Model: Sat / Kirala (${rentSellSelection === 'kirala' ? 'Kiralık' : 'Satılık'})`}
+            </Text>
+          </View>
+          <Pressable onPress={() => { setCreationStep(1); setCreationMode(null); }} style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, backgroundColor: theme.gold }}>
+            <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>Değiştir</Text>
+          </Pressable>
+        </View>
+
+        <View style={[styles.formCard, { backgroundColor: cardBg, borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.04)' }]}>
+          <View style={{ gap: 6, marginBottom: 16 }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: theme.gold }}>🤖 Yapay Zeka Ürün Analizi</Text>
+            <Text style={{ fontSize: 12, color: theme.textSecondary }}>
+              Yüklediğiniz görseller analiz edilerek aşağıdaki alanlar doldurulmuştur. Lütfen her alanı kontrol edip onaylayın.
+            </Text>
+          </View>
+
+          {formError !== '' && (
+            <View style={[styles.errorContainer, { backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.05)', borderColor: 'rgba(239, 68, 68, 0.2)', marginBottom: 12 }]}>
+              <Text style={styles.errorText}>{formError}</Text>
+            </View>
+          )}
+
+          <View style={styles.formBody}>
+            {/* Title Field */}
+            <View style={styles.inputGroup}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={[styles.inputLabel, { color: theme.text }]}>İlan Başlığı *</Text>
+                {titleApproved && <Text style={{ color: '#10B981', fontSize: 11, fontWeight: 'bold' }}>✓ Onaylandı</Text>}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <TextInput
+                  placeholder="Başlık girin..."
+                  placeholderTextColor={theme.textSecondary}
+                  value={title}
+                  onChangeText={(val) => {
+                    setTitle(val);
+                    setTitleApproved(false);
+                  }}
+                  style={[
+                    styles.textInput,
+                    {
+                      flex: 1,
+                      color: theme.text,
+                      backgroundColor: inputBg,
+                      borderColor: titleApproved ? '#10B981' : inputBorder,
+                      borderWidth: titleApproved ? 1.5 : 1,
+                    }
+                  ]}
+                />
+                <Pressable
+                  onPress={() => {
+                    if (!title.trim()) {
+                      Alert.alert('Hata', 'Lütfen geçerli bir başlık girin.');
+                      return;
+                    }
+                    setTitleApproved(!titleApproved);
+                  }}
+                  style={{
+                    backgroundColor: titleApproved ? '#10B981' : theme.gold,
+                    height: 48,
+                    paddingHorizontal: 12,
+                    borderRadius: 6,
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 }}>
+                    {titleApproved ? 'Kaldır' : 'Onayla'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Description Field */}
+            <View style={styles.inputGroup}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={[styles.inputLabel, { color: theme.text }]}>Açıklama *</Text>
+                {descriptionApproved && <Text style={{ color: '#10B981', fontSize: 11, fontWeight: 'bold' }}>✓ Onaylandı</Text>}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+                <TextInput
+                  placeholder="Açıklama girin..."
+                  placeholderTextColor={theme.textSecondary}
+                  multiline
+                  numberOfLines={4}
+                  value={description}
+                  onChangeText={(val) => {
+                    setDescription(val);
+                    setDescriptionApproved(false);
+                  }}
+                  style={[
+                    styles.textAreaInput,
+                    {
+                      flex: 1,
+                      color: theme.text,
+                      backgroundColor: inputBg,
+                      borderColor: descriptionApproved ? '#10B981' : inputBorder,
+                      borderWidth: descriptionApproved ? 1.5 : 1,
+                    }
+                  ]}
+                />
+                <Pressable
+                  onPress={() => {
+                    if (!description.trim()) {
+                      Alert.alert('Hata', 'Lütfen geçerli bir açıklama girin.');
+                      return;
+                    }
+                    setDescriptionApproved(!descriptionApproved);
+                  }}
+                  style={{
+                    backgroundColor: descriptionApproved ? '#10B981' : theme.gold,
+                    paddingVertical: 12,
+                    paddingHorizontal: 12,
+                    borderRadius: 6,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    alignSelf: 'stretch'
+                  }}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 }}>
+                    {descriptionApproved ? 'Kaldır' : 'Onayla'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Category Field */}
+            <View style={styles.inputGroup}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={[styles.inputLabel, { color: theme.text }]}>Kategori *</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <Pressable
+                  onPress={() => {
+                    setCategoryPickerVisible(true);
+                  }}
+                  style={[
+                    styles.dropdownTrigger,
+                    {
+                      flex: 1,
+                      backgroundColor: inputBg,
+                      borderColor: category ? theme.gold : inputBorder,
+                      borderWidth: category ? 1.5 : 1,
+                      height: 48,
+                      justifyContent: 'space-between',
+                      borderRadius: 6,
+                      paddingHorizontal: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                    }
+                  ]}
+                >
+                  <Text style={{ color: category ? theme.text : theme.textSecondary, fontSize: 13 }} numberOfLines={1}>
+                    {category || 'Seçiniz'}
+                  </Text>
+                  <ChevronRight size={16} color={theme.textSecondary} />
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Condition (Durum) Selector */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: theme.text }]}>Ürünün Durumu *</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                {[
+                  { value: 'Sıfır', label: '✨ Sıfır' },
+                  { value: 'İyi', label: '👍 İyi' },
+                  { value: 'Hasarlı', label: '⚠️ Hasarlı' },
+                  { value: 'Çalışmıyor', label: '🔧 Çalışmıyor' }
+                ].map((item) => {
+                  const isSelected = condition === item.value;
+                  return (
+                    <Pressable
+                      key={item.value}
+                      onPress={() => setCondition(item.value)}
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 16,
+                        borderRadius: 20,
+                        backgroundColor: isSelected ? theme.gold : inputBg,
+                        borderWidth: 1.5,
+                        borderColor: isSelected ? theme.gold : inputBorder,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{
+                        color: isSelected ? '#FFFFFF' : theme.text,
+                        fontWeight: isSelected ? 'bold' : 'normal',
+                        fontSize: 13,
+                      }}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={{ marginTop: 12 }}>
+              {!(titleApproved && descriptionApproved && category) && (
+                <Text style={{ color: '#EF4444', fontSize: 12, textAlign: 'center', marginBottom: 8, fontWeight: '600' }}>
+                  ⚠️ Devam etmek için Başlık ve Açıklama alanlarını onaylamalı, Kategori seçmelisiniz.
+                </Text>
+              )}
+              <Pressable 
+                style={({ pressed }) => [
+                  styles.submitButton, 
+                  { 
+                    backgroundColor: (titleApproved && descriptionApproved && category) ? theme.gold : '#CBD5E1',
+                    opacity: pressed ? 0.9 : 1,
+                    transform: [{ scale: pressed ? 0.98 : 1 }]
+                  }
+                ]} 
+                disabled={!(titleApproved && descriptionApproved && category)}
+                onPress={() => {
+                  setCreationStep(4);
+                }}
+              >
+                <Text style={styles.submitText}>Sonraki Adıma Geç</Text>
+                <ChevronRight size={18} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  };
+
   return (
     <ThemedView style={styles.container}>
       {/* Top Navigation Bar */}
       <View style={[styles.navBar, { borderBottomColor: theme.backgroundSelected }]}>
         <Pressable style={styles.navBarIcon} onPress={() => {
-          if (creationStep === 2) {
+          if (creationStep === 4) {
+            setCreationStep(3);
+          } else if (creationStep === 3) {
+            setCreationStep(2);
+          } else if (creationStep === 2) {
             if (creationMode === 'rent') {
               setCreationStep(1.5);
             } else {
@@ -846,10 +2092,52 @@ export default function CreateListingScreen() {
           <ArrowLeft size={20} color={theme.text} />
         </Pressable>
         <Text style={[styles.navBarTitle, { color: theme.text }]}>
-          {creationStep === 1 ? 'İLAN TÜRÜ SEÇİN' : creationStep === 1.5 ? 'İŞLEM TÜRÜ SEÇİN' : 'YENİ İLAN BİLGİLERİ'}
+          {creationStep === 1 ? 'İLAN TÜRÜ' :
+           creationStep === 1.5 ? 'İŞLEM TÜRÜ' :
+           creationStep === 2 ? 'MEDYA YÜKLEME' :
+           creationStep === 3 ? 'YAPAY ZEKA ANALİZİ' : 'DETAYLI BİLGİLER'}
         </Text>
-        <View style={{ width: 40 }} />
+        <Pressable onPress={handleReset} style={{ padding: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <RotateCcw size={15} color={theme.gold} />
+          <Text style={{ color: theme.gold, fontSize: 11, fontWeight: '700' }}>Sıfırla</Text>
+        </Pressable>
       </View>
+
+      {/* Reset Confirmation Modal */}
+      <Modal
+        visible={showResetModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowResetModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: isDark ? '#1A2035' : '#FFFFFF', borderRadius: 16, padding: 24, width: '100%', maxWidth: 360, gap: 16 }}>
+            <View style={{ alignItems: 'center', gap: 8 }}>
+              <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(239,68,68,0.12)', alignItems: 'center', justifyContent: 'center' }}>
+                <RotateCcw size={24} color="#EF4444" />
+              </View>
+              <Text style={{ color: isDark ? '#FFFFFF' : '#111827', fontSize: 17, fontWeight: '700', textAlign: 'center' }}>Süreci Sıfırla</Text>
+              <Text style={{ color: isDark ? '#94A3B8' : '#6B7280', fontSize: 13, textAlign: 'center', lineHeight: 20 }}>
+                Seçilen tüm bilgileri silerek ilan yükleme sürecini baştan başlatmak istediğinize emin misiniz?
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Pressable
+                onPress={() => setShowResetModal(false)}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: isDark ? 'rgba(255,255,255,0.15)' : '#E5E7EB', alignItems: 'center' }}
+              >
+                <Text style={{ color: isDark ? '#CBD5E1' : '#374151', fontWeight: '600', fontSize: 14 }}>İptal</Text>
+              </Pressable>
+              <Pressable
+                onPress={doReset}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: '#EF4444', alignItems: 'center' }}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Evet, Sıfırla</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {creationStep === 1 ? (
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
@@ -875,8 +2163,8 @@ export default function CreateListingScreen() {
                 setCreationStep(2);
               }}
             >
-              <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(255, 107, 0, 0.1)' }]}>
-                <Gavel size={28} color={theme.gold} />
+              <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(9, 105, 218, 0.1)' }]}>
+                <Gavel size={Platform.OS === 'web' ? 38 : 28} color={theme.gold} />
               </View>
               <Text style={[styles.gridCardTitle, { color: theme.text }]}>Canlı Mezat</Text>
               <Text style={[styles.gridCardDesc, { color: theme.textSecondary }]}>Süreli açık artırma ilanları başlatın</Text>
@@ -900,7 +2188,7 @@ export default function CreateListingScreen() {
               }}
             >
               <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
-                <Tag size={28} color="#3B82F6" />
+                <Tag size={Platform.OS === 'web' ? 38 : 28} color="#3B82F6" />
               </View>
               <Text style={[styles.gridCardTitle, { color: theme.text }]}>Bit Pazarı</Text>
               <Text style={[styles.gridCardDesc, { color: theme.textSecondary }]}>Sabit fiyatlı veya teklifli ilanlar yükleyin</Text>
@@ -925,7 +2213,7 @@ export default function CreateListingScreen() {
               }}
             >
               <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                <CheckCircle2 size={28} color="#10B981" />
+                <CheckCircle2 size={Platform.OS === 'web' ? 38 : 28} color="#10B981" />
               </View>
               <Text style={[styles.gridCardTitle, { color: theme.text }]}>Üreticiden Tüketiciye</Text>
               <Text style={[styles.gridCardDesc, { color: theme.textSecondary }]}>El yapımı, doğal gıda veya sertifikalı ürünler</Text>
@@ -948,7 +2236,7 @@ export default function CreateListingScreen() {
               }}
             >
               <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(139, 92, 246, 0.1)' }]}>
-                <Key size={28} color="#8B5CF6" />
+                <Key size={Platform.OS === 'web' ? 38 : 28} color="#8B5CF6" />
               </View>
               <Text style={[styles.gridCardTitle, { color: theme.text }]}>Sat / Kirala</Text>
               <Text style={[styles.gridCardDesc, { color: theme.textSecondary }]}>Satılık veya kiralık gayrimenkul, taşıt ve alet ilanları</Text>
@@ -984,7 +2272,7 @@ export default function CreateListingScreen() {
                 setCreationStep(2);
               }}
             >
-              <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(255, 107, 0, 0.1)' }]}>
+              <View style={[styles.gridIconContainer, { backgroundColor: 'rgba(9, 105, 218, 0.1)' }]}>
                 <Tag size={28} color={theme.gold} />
               </View>
               <View style={{ flex: 1 }}>
@@ -1031,10 +2319,14 @@ export default function CreateListingScreen() {
             </Pressable>
           </View>
         </ScrollView>
+      ) : creationStep === 2 ? (
+        renderStep2()
+      ) : creationStep === 3 ? (
+        renderStep3()
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
           {/* Active Mode Banner */}
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? 'rgba(255, 107, 0, 0.1)' : '#FFF7ED', padding: 12, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255, 107, 0, 0.2)', marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? 'rgba(9, 105, 218, 0.1)' : '#FFF7ED', padding: 12, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(9, 105, 218, 0.2)', marginBottom: 8 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               {creationMode === 'auction' && <Gavel size={18} color={theme.gold} />}
               {creationMode === 'flea' && <Tag size={18} color="#3B82F6" />}
@@ -1057,9 +2349,11 @@ export default function CreateListingScreen() {
             {formSuccess ? (
               <View style={styles.successContainer}>
                 <CheckCircle2 size={44} color="#34D399" />
-                <Text style={styles.successText}>İlanınız başarıyla eklendi ve yayınlandı!</Text>
+                <Text style={styles.successText}>
+                  {editId ? 'İlanınız başarıyla güncellendi!' : 'İlanınız başarıyla eklendi ve yayınlandı!'}
+                </Text>
                 <Text style={{ color: theme.textSecondary, fontSize: 13 }}>
-                  Keşfet veya Mezat sekmelerinde görebilirsiniz.
+                  {editId ? 'Değişiklikler kaydedildi.' : 'Keşfet veya Mezat sekmelerinde görebilirsiniz.'}
                 </Text>
               </View>
             ) : (
@@ -1070,32 +2364,14 @@ export default function CreateListingScreen() {
                   </View>
                 )}
 
-              {/* Category Picker (Highly Visible at the Top) */}
-              <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: theme.text }]}>Kategori *</Text>
-                <Pressable
-                  onPress={() => setCategoryPickerVisible(true)}
-                  style={[
-                    styles.dropdownTrigger,
-                    {
-                      backgroundColor: inputBg,
-                      borderColor: inputBorder,
-                      height: 48,
-                      justifyContent: 'space-between',
-                      borderRadius: 6,
-                      borderWidth: 1,
-                      paddingHorizontal: 16,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                    }
-                  ]}
-                >
-                  <Text style={{ color: category ? theme.text : theme.textSecondary, fontSize: 13 }} numberOfLines={1}>
-                    {category || 'Seçiniz'}
-                  </Text>
-                  <ChevronRight size={16} color={theme.textSecondary} />
-                </Pressable>
+              {/* İlan Detay Özeti */}
+              <View style={{ padding: 14, borderRadius: 8, backgroundColor: isDark ? 'rgba(255, 255, 255, 0.02)' : '#F8FAFC', borderWidth: 1, borderColor: inputBorder, marginBottom: 12, gap: 8 }}>
+                <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 13 }}>📋 İlan Detay Özeti</Text>
+                <Text style={{ color: theme.text, fontSize: 13 }}>Başlık: <Text style={{ fontWeight: 'bold' }}>{title}</Text></Text>
+                <Text style={{ color: theme.text, fontSize: 13 }} numberOfLines={2}>Açıklama: {description}</Text>
+                <Text style={{ color: theme.text, fontSize: 13 }}>Kategori: <Text style={{ fontWeight: 'bold' }}>{category}</Text></Text>
               </View>
+
 
               {/* Real Estate Sub-Category Selector (Conditional) */}
               {category.includes('Emlak') && (
@@ -1126,284 +2402,7 @@ export default function CreateListingScreen() {
                     </Pressable>
                   </View>
 
-                  {/* Bireysel / Kurumsal Seçimi */}
-                  <View style={styles.inputGroup}>
-                    <Text style={[styles.inputLabel, { color: theme.text }]}>Üyelik Türü *</Text>
-                    <View style={{ flexDirection: 'row', gap: 12 }}>
-                      <Pressable
-                        style={{
-                          flex: 1,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          backgroundColor: emlakType === 'bireysel' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                          borderColor: emlakType === 'bireysel' ? theme.gold : inputBorder,
-                          borderWidth: 1.5,
-                          borderRadius: 8,
-                          padding: 12,
-                          gap: 8,
-                        }}
-                        onPress={() => setEmlakType('bireysel')}
-                      >
-                        <View style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: 9,
-                          borderWidth: 2,
-                          borderColor: emlakType === 'bireysel' ? theme.gold : theme.textSecondary,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}>
-                          {emlakType === 'bireysel' && (
-                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                          )}
-                        </View>
-                        <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Bireysel İlan</Text>
-                      </Pressable>
-
-                      <Pressable
-                        style={{
-                          flex: 1,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          backgroundColor: emlakType === 'kurumsal' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                          borderColor: emlakType === 'kurumsal' ? theme.gold : inputBorder,
-                          borderWidth: 1.5,
-                          borderRadius: 8,
-                          padding: 12,
-                          gap: 8,
-                        }}
-                        onPress={() => setEmlakType('kurumsal')}
-                      >
-                        <View style={{
-                          width: 18,
-                          height: 18,
-                          borderRadius: 9,
-                          borderWidth: 2,
-                          borderColor: emlakType === 'kurumsal' ? theme.gold : theme.textSecondary,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}>
-                          {emlakType === 'kurumsal' && (
-                            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                          )}
-                        </View>
-                        <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Kurumsal İlan</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-
-                  {/* Kurumsal Evrak Yükleme Alanı */}
-                  {emlakType === 'kurumsal' && (
-                    <View style={{
-                      gap: 16,
-                      marginVertical: 8,
-                      padding: 16,
-                      borderRadius: 8,
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.02)' : '#F8FAFC',
-                      borderWidth: 1,
-                      borderColor: inputBorder,
-                    }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                        <ShieldCheck size={18} color={theme.gold} />
-                        <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 14 }}>🏢 Kurumsal Evrak Doğrulaması</Text>
-                      </View>
-
-                      {/* 1. Taşınmaz Ticareti Yetki Belgesi */}
-                      <View style={{ gap: 6 }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>1. Taşınmaz Ticareti Yetki Belgesi *</Text>
-                        <Pressable
-                          onPress={() => pickDocument(setTasinmazYetkiFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 44,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: tasinmazYetkiFile ? 'solid' : 'dashed',
-                            borderColor: tasinmazYetkiFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: tasinmazYetkiFile ? theme.text : theme.textSecondary }}>
-                            {tasinmazYetkiFile || 'Yetki belgesini seçin (.pdf)'}
-                          </Text>
-                          {tasinmazYetkiFile ? <CheckCircle2 size={14} color="#34D399" /> : <Upload size={14} color={theme.textSecondary} />}
-                        </Pressable>
-                      </View>
-
-                      {/* 2. Vergi Levhası */}
-                      <View style={{ gap: 6 }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>2. Vergi Levhası *</Text>
-                        <Pressable
-                          onPress={() => pickDocument(setEmlakVergiLevhasiFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 44,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: emlakVergiLevhasiFile ? 'solid' : 'dashed',
-                            borderColor: emlakVergiLevhasiFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: emlakVergiLevhasiFile ? theme.text : theme.textSecondary }}>
-                            {emlakVergiLevhasiFile || 'Vergi levhasını seçin (.pdf, .jpg)'}
-                          </Text>
-                          {emlakVergiLevhasiFile ? <CheckCircle2 size={14} color="#34D399" /> : <Upload size={14} color={theme.textSecondary} />}
-                        </Pressable>
-                      </View>
-
-                      {/* 3. Ticaret Oda Kaydı veya Esnaf Belgesi */}
-                      <View style={{ gap: 6 }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>3. Ticaret Odası / Esnaf Belgesi *</Text>
-                        <Pressable
-                          onPress={() => pickDocument(setEmlakOdaKaydiFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 44,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: emlakOdaKaydiFile ? 'solid' : 'dashed',
-                            borderColor: emlakOdaKaydiFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: emlakOdaKaydiFile ? theme.text : theme.textSecondary }}>
-                            {emlakOdaKaydiFile || 'Oda kayıt belgesini seçin (.pdf)'}
-                          </Text>
-                          {emlakOdaKaydiFile ? <CheckCircle2 size={14} color="#34D399" /> : <Upload size={14} color={theme.textSecondary} />}
-                        </Pressable>
-                      </View>
-
-                      {/* 4. Şirket Yetkilisine Ait Resmi Belgeler */}
-                      <View style={{ gap: 8, padding: 12, borderRadius: 6, backgroundColor: isDark ? 'rgba(0,0,0,0.1)' : '#F1F5F9' }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>4. Şirket Yetkili Belgeleri *</Text>
-
-                        {/* İmza Sirküleri */}
-                        <Pressable
-                          onPress={() => pickDocument(setEmlakImzaSirkuleriFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 40,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: emlakImzaSirkuleriFile ? 'solid' : 'dashed',
-                            borderColor: emlakImzaSirkuleriFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 11, color: emlakImzaSirkuleriFile ? theme.text : theme.textSecondary }}>
-                            {emlakImzaSirkuleriFile || 'İmza Sirküleri / Beyannamesi'}
-                          </Text>
-                          {emlakImzaSirkuleriFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                        </Pressable>
-
-                        {/* T.C. Kimlik / Ehliyet */}
-                        <Pressable
-                          onPress={() => pickDocument(setEmlakYetkiliKimlikFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 40,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: emlakYetkiliKimlikFile ? 'solid' : 'dashed',
-                            borderColor: emlakYetkiliKimlikFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 11, color: emlakYetkiliKimlikFile ? theme.text : theme.textSecondary }}>
-                            {emlakYetkiliKimlikFile || 'Yetkili Kimlik / Ehliyet Görseli'}
-                          </Text>
-                          {emlakYetkiliKimlikFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                        </Pressable>
-
-                        {/* Ticaret Sicil Gazetesi */}
-                        <Pressable
-                          onPress={() => pickDocument(setEmlakSicilGazetesiFile)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            height: 40,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderStyle: emlakSicilGazetesiFile ? 'solid' : 'dashed',
-                            borderColor: emlakSicilGazetesiFile ? '#34D399' : inputBorder,
-                            backgroundColor: inputBg,
-                            paddingHorizontal: 12,
-                          }}
-                        >
-                          <Text style={{ fontSize: 11, color: emlakSicilGazetesiFile ? theme.text : theme.textSecondary }}>
-                            {emlakSicilGazetesiFile || 'Ticaret Sicil Gazetesi Nüshası'}
-                          </Text>
-                          {emlakSicilGazetesiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                        </Pressable>
-                      </View>
-
-                      {/* 5. EİDS & e-Devlet Onayı */}
-                      <View style={{
-                        gap: 8,
-                        padding: 12,
-                        borderRadius: 6,
-                        backgroundColor: eidsApproved ? 'rgba(52, 211, 153, 0.1)' : 'rgba(255, 107, 0, 0.05)',
-                        borderWidth: 1,
-                        borderColor: eidsApproved ? 'rgba(52, 211, 153, 0.3)' : 'rgba(255, 107, 0, 0.2)'
-                      }}>
-                        <Text style={{ fontSize: 12, fontWeight: '700', color: theme.text }}>5. EİDS & e-Devlet Onayı *</Text>
-                        <Text style={{ fontSize: 11, color: theme.textSecondary, lineHeight: 16 }}>
-                          Kurumsal ilan doğrulaması için e-Devlet üzerinden kimlik ve yetkilendirme doğrulaması yapılmalıdır.
-                        </Text>
-                        
-                        <Pressable
-                          onPress={() => {
-                            if (eidsApproved) return;
-                            setIsVerifyingEids(true);
-                            setTimeout(() => {
-                              setIsVerifyingEids(false);
-                              setEidsApproved(true);
-                              Alert.alert('Doğrulama Başarılı', 'e-Devlet entegrasyonu ile EİDS onayı tamamlanmıştır.');
-                            }, 1500);
-                          }}
-                          disabled={eidsApproved || isVerifyingEids}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            height: 40,
-                            borderRadius: 6,
-                            backgroundColor: eidsApproved ? '#34D399' : theme.gold,
-                            gap: 8,
-                            marginTop: 4,
-                          }}
-                        >
-                          {isVerifyingEids ? (
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                          ) : (
-                            <>
-                              <ShieldCheck size={16} color="#FFFFFF" strokeWidth={2.5} />
-                              <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 12 }}>
-                                {eidsApproved ? 'e-Devlet ile Doğrulandı' : 'e-Devlet ile Giriş Yap & Doğrula'}
-                              </Text>
-                            </>
-                          )}
-                        </Pressable>
-                      </View>
-                    </View>
-                  )}
+                  {/* Bireysel / Kurumsal Seçimi ve Evrak Yükleme Alanı Kaldırıldı - Yetkilendirme hesap düzeyindedir */}
                 </>
               )}
 
@@ -1525,590 +2524,12 @@ export default function CreateListingScreen() {
                       </View>
                     )}
 
-                    {/* Bireysel / Kurumsal Seçimi (Only for vehicle sales, rentals are kurumsal-only) */}
-                    {creationMode === 'rent' && rentSellSelection === 'kirala' ? (
-                      <View style={{ gap: 8, padding: 12, borderRadius: 6, backgroundColor: 'rgba(239, 68, 68, 0.05)', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)' }}>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#EF4444' }}>⚠️ Yasal Taşıt Kiralama Bildirimi</Text>
-                        <Text style={{ fontSize: 11, color: theme.textSecondary, lineHeight: 16 }}>
-                          Yasal düzenlemeler gereği taşıt kiralama ilanları yalnızca onaylı kurumsal firmalar (Rent a Car) tarafından yayınlanabilir. Bireysel kiralama ilanı verilmesi yasaktır.
-                        </Text>
-                      </View>
-                    ) : (
-                      <View style={styles.inputGroup}>
-                        <Text style={[styles.inputLabel, { color: theme.text }]}>Üyelik Türü *</Text>
-                        <View style={{ flexDirection: 'row', gap: 12 }}>
-                          <Pressable
-                            style={{
-                              flex: 1,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              backgroundColor: vehicleType === 'bireysel' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                              borderColor: vehicleType === 'bireysel' ? theme.gold : inputBorder,
-                              borderWidth: 1.5,
-                              borderRadius: 8,
-                              padding: 12,
-                              gap: 8,
-                            }}
-                            onPress={() => setVehicleType('bireysel')}
-                          >
-                            <View style={{
-                              width: 18,
-                              height: 18,
-                              borderRadius: 9,
-                              borderWidth: 2,
-                              borderColor: vehicleType === 'bireysel' ? theme.gold : theme.textSecondary,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}>
-                              {vehicleType === 'bireysel' && (
-                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                              )}
-                            </View>
-                            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Bireysel İlan</Text>
-                          </Pressable>
-
-                          <Pressable
-                            style={{
-                              flex: 1,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              backgroundColor: vehicleType === 'kurumsal' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                              borderColor: vehicleType === 'kurumsal' ? theme.gold : inputBorder,
-                              borderWidth: 1.5,
-                              borderRadius: 8,
-                              padding: 12,
-                              gap: 8,
-                            }}
-                            onPress={() => setVehicleType('kurumsal')}
-                          >
-                            <View style={{
-                              width: 18,
-                              height: 18,
-                              borderRadius: 9,
-                              borderWidth: 2,
-                              borderColor: vehicleType === 'kurumsal' ? theme.gold : theme.textSecondary,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}>
-                              {vehicleType === 'kurumsal' && (
-                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                              )}
-                            </View>
-                            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Kurumsal İlan</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Corporate Type Selector (Only if Kurumsal is chosen for sales) */}
-                    {(vehicleType === 'kurumsal' && creationMode !== 'rent') && (
-                      <View style={styles.inputGroup}>
-                        <Text style={[styles.inputLabel, { color: theme.text }]}>Kurumsal İşletme Türü *</Text>
-                        <View style={{ flexDirection: 'row', gap: 12 }}>
-                          <Pressable
-                            style={{
-                              flex: 1,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              backgroundColor: vehicleCorporateType === 'galeri' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                              borderColor: vehicleCorporateType === 'galeri' ? theme.gold : inputBorder,
-                              borderWidth: 1.5,
-                              borderRadius: 8,
-                              padding: 12,
-                              gap: 8,
-                            }}
-                            onPress={() => setVehicleCorporateType('galeri')}
-                          >
-                            <View style={{
-                              width: 18,
-                              height: 18,
-                              borderRadius: 9,
-                              borderWidth: 2,
-                              borderColor: vehicleCorporateType === 'galeri' ? theme.gold : theme.textSecondary,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}>
-                              {vehicleCorporateType === 'galeri' && (
-                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                              )}
-                            </View>
-                            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Oto Galeri</Text>
-                          </Pressable>
-
-                          <Pressable
-                            style={{
-                              flex: 1,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              backgroundColor: vehicleCorporateType === 'rent_a_car' ? 'rgba(255, 107, 0, 0.1)' : inputBg,
-                              borderColor: vehicleCorporateType === 'rent_a_car' ? theme.gold : inputBorder,
-                              borderWidth: 1.5,
-                              borderRadius: 8,
-                              padding: 12,
-                              gap: 8,
-                            }}
-                            onPress={() => setVehicleCorporateType('rent_a_car')}
-                          >
-                            <View style={{
-                              width: 18,
-                              height: 18,
-                              borderRadius: 9,
-                              borderWidth: 2,
-                              borderColor: vehicleCorporateType === 'rent_a_car' ? theme.gold : theme.textSecondary,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}>
-                              {vehicleCorporateType === 'rent_a_car' && (
-                                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.gold }} />
-                              )}
-                            </View>
-                            <Text style={{ color: theme.text, fontWeight: '700', fontSize: 13 }}>Rent a Car</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Galeri Evrak Yükleme Alanı */}
-                    {(vehicleType === 'kurumsal' && creationMode !== 'rent' && vehicleCorporateType === 'galeri') && (
-                      <View style={{
-                        gap: 14,
-                        padding: 14,
-                        borderRadius: 6,
-                        backgroundColor: isDark ? 'rgba(0,0,0,0.1)' : '#F1F5F9',
-                        borderWidth: 1,
-                        borderColor: inputBorder,
-                      }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                          <ShieldCheck size={16} color={theme.gold} />
-                          <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 13 }}>🏢 Oto Galeri Belgeleri</Text>
-                        </View>
-
-                        {/* 1. Yetki Belgesi */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>1. Motorlu Kara Taşıtı Ticareti Yetki Belgesi *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setGaleriYetkiBelgesiFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: galeriYetkiBelgesiFile ? 'solid' : 'dashed',
-                              borderColor: galeriYetkiBelgesiFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: galeriYetkiBelgesiFile ? theme.text : theme.textSecondary }}>
-                              {galeriYetkiBelgesiFile || 'Belge seçin (.pdf)'}
-                            </Text>
-                            {galeriYetkiBelgesiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 2. Mesleki Yeterlilik Belgesi */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>2. Seviye 5 Mesleki Yeterlilik Belgesi *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setGaleriMeslekiYeterlilikFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: galeriMeslekiYeterlilikFile ? 'solid' : 'dashed',
-                              borderColor: galeriMeslekiYeterlilikFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: galeriMeslekiYeterlilikFile ? theme.text : theme.textSecondary }}>
-                              {galeriMeslekiYeterlilikFile || 'Belge seçin (.pdf)'}
-                            </Text>
-                            {galeriMeslekiYeterlilikFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 3. Vergi Levhası */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>3. Vergi Levhası *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setGaleriVergiLevhasiFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: galeriVergiLevhasiFile ? 'solid' : 'dashed',
-                              borderColor: galeriVergiLevhasiFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: galeriVergiLevhasiFile ? theme.text : theme.textSecondary }}>
-                              {galeriVergiLevhasiFile || 'Belge seçin (.pdf, .jpg)'}
-                            </Text>
-                            {galeriVergiLevhasiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 4. Oda Kaydı / Gazete */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>4. Oda Kayıt Belgesi & Ticaret Sicil Gazetesi *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setGaleriOdaKaydiFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: galeriOdaKaydiFile ? 'solid' : 'dashed',
-                              borderColor: galeriOdaKaydiFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: galeriOdaKaydiFile ? theme.text : theme.textSecondary }}>
-                              {galeriOdaKaydiFile || 'Belge seçin (.pdf)'}
-                            </Text>
-                            {galeriOdaKaydiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 5. Ruhsat */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>5. İşyeri Açma ve Çalışma Ruhsatı *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setGaleriRuhsatFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: galeriRuhsatFile ? 'solid' : 'dashed',
-                              borderColor: galeriRuhsatFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: galeriRuhsatFile ? theme.text : theme.textSecondary }}>
-                              {galeriRuhsatFile || 'Belge seçin (.pdf, .jpg)'}
-                            </Text>
-                            {galeriRuhsatFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* e-Devlet & EİDS */}
-                        <View style={{ gap: 4, marginTop: 4 }}>
-                          <Pressable
-                            onPress={() => {
-                              if (galeriEidsApproved) return;
-                              setIsVerifyingGaleriEids(true);
-                              setTimeout(() => {
-                                setIsVerifyingGaleriEids(false);
-                                setGaleriEidsApproved(true);
-                                Alert.alert('Doğrulama Başarılı', 'e-Devlet entegrasyonu ile Galeri EİDS onayı tamamlanmıştır.');
-                              }, 1500);
-                            }}
-                            disabled={galeriEidsApproved || isVerifyingGaleriEids}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: 38,
-                              borderRadius: 4,
-                              backgroundColor: galeriEidsApproved ? '#34D399' : theme.gold,
-                              gap: 6,
-                            }}
-                          >
-                            {isVerifyingGaleriEids ? (
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                            ) : (
-                              <>
-                                <ShieldCheck size={14} color="#FFFFFF" strokeWidth={2.5} />
-                                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 11 }}>
-                                  {galeriEidsApproved ? 'EİDS Doğrulandı' : 'e-Devlet ile Giriş Yap & Doğrula'}
-                                </Text>
-                              </>
-                            )}
-                          </Pressable>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Rent a Car Evrak Yükleme Alanı (For sales with Rent a Car type or forced on Rentals) */}
-                    {((creationMode === 'rent' && rentSellSelection === 'kirala') || (vehicleType === 'kurumsal' && vehicleCorporateType === 'rent_a_car')) && (
-                      <View style={{
-                        gap: 14,
-                        padding: 14,
-                        borderRadius: 6,
-                        backgroundColor: isDark ? 'rgba(0,0,0,0.1)' : '#F1F5F9',
-                        borderWidth: 1,
-                        borderColor: inputBorder,
-                      }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                          <ShieldCheck size={16} color={theme.gold} />
-                          <Text style={{ fontWeight: 'bold', color: theme.gold, fontSize: 13 }}>🏢 Rent a Car Belgeleri</Text>
-                        </View>
-
-                        {/* 1. Vergi Levhası */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>1. Vergi Levhası *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setRentVergiLevhasiFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: rentVergiLevhasiFile ? 'solid' : 'dashed',
-                              borderColor: rentVergiLevhasiFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: rentVergiLevhasiFile ? theme.text : theme.textSecondary }}>
-                              {rentVergiLevhasiFile || 'Belge seçin (.pdf, .jpg)'}
-                            </Text>
-                            {rentVergiLevhasiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 2. Oda Kaydı */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>2. Ticaret Odası / Esnaf Belgesi *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setRentOdaKaydiFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: rentOdaKaydiFile ? 'solid' : 'dashed',
-                              borderColor: rentOdaKaydiFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: rentOdaKaydiFile ? theme.text : theme.textSecondary }}>
-                              {rentOdaKaydiFile || 'Belge seçin (.pdf)'}
-                            </Text>
-                            {rentOdaKaydiFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 3. Ruhsat */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>3. İşyeri Açma ve Çalışma Ruhsatı *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setRentRuhsatFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: rentRuhsatFile ? 'solid' : 'dashed',
-                              borderColor: rentRuhsatFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: rentRuhsatFile ? theme.text : theme.textSecondary }}>
-                              {rentRuhsatFile || 'Belge seçin (.pdf, .jpg)'}
-                            </Text>
-                            {rentRuhsatFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 4. İmza Sirküleri */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: theme.text }}>4. İmza Sirküleri veya Yetki Belgesi *</Text>
-                          <Pressable
-                            onPress={() => pickDocument(setRentImzaSirkuleriFile)}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              height: 38,
-                              borderRadius: 4,
-                              borderWidth: 1,
-                              borderStyle: rentImzaSirkuleriFile ? 'solid' : 'dashed',
-                              borderColor: rentImzaSirkuleriFile ? '#34D399' : inputBorder,
-                              backgroundColor: inputBg,
-                              paddingHorizontal: 10,
-                            }}
-                          >
-                            <Text style={{ fontSize: 11, color: rentImzaSirkuleriFile ? theme.text : theme.textSecondary }}>
-                              {rentImzaSirkuleriFile || 'Belge seçin (.pdf)'}
-                            </Text>
-                            {rentImzaSirkuleriFile ? <CheckCircle2 size={12} color="#34D399" /> : <Upload size={12} color={theme.textSecondary} />}
-                          </Pressable>
-                        </View>
-
-                        {/* 5. e-Devlet/EİDS Onayı */}
-                        <View style={{ gap: 4, marginTop: 4 }}>
-                          <Pressable
-                            onPress={() => {
-                              if (rentEidsApproved) return;
-                              setIsVerifyingRentEids(true);
-                              setTimeout(() => {
-                                setIsVerifyingRentEids(false);
-                                setRentEidsApproved(true);
-                                Alert.alert('Doğrulama Başarılı', 'e-Devlet entegrasyonu ile Rent a Car EİDS onayı tamamlanmıştır.');
-                              }, 1500);
-                            }}
-                            disabled={rentEidsApproved || isVerifyingRentEids}
-                            style={{
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              height: 38,
-                              borderRadius: 4,
-                              backgroundColor: rentEidsApproved ? '#34D399' : theme.gold,
-                              gap: 6,
-                            }}
-                          >
-                            {isVerifyingRentEids ? (
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                            ) : (
-                              <>
-                                <ShieldCheck size={14} color="#FFFFFF" strokeWidth={2.5} />
-                                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 11 }}>
-                                  {rentEidsApproved ? 'EİDS Doğrulandı' : 'e-Devlet ile Giriş Yap & Doğrula'}
-                                </Text>
-                              </>
-                            )}
-                          </Pressable>
-                        </View>
-                      </View>
-                    )}
+                    {/* Bireysel / Kurumsal Seçimi ve Evrak Yükleme Alanı Kaldırıldı - Yetkilendirme hesap düzeyindedir */}
                   </View>
                 );
               })()}
 
-              <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: theme.text }]}>İlan Başlığı *</Text>
-                <TextInput
-                  placeholder="Vintage Levi's ceket, antika gümüş vazo vb..."
-                  placeholderTextColor={theme.textSecondary}
-                  value={title}
-                  onChangeText={setTitle}
-                  onFocus={() => setFocusedInput('title')}
-                  onBlur={() => setFocusedInput(null)}
-                  style={[
-                    styles.textInput,
-                    {
-                      color: theme.text,
-                      backgroundColor: inputBg,
-                      borderColor: focusedInput === 'title' ? inputBorderFocused : inputBorder,
-                      borderWidth: focusedInput === 'title' ? 1.5 : 1,
-                    }
-                  ]}
-                />
-              </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: theme.text }]}>Açıklama *</Text>
-                <TextInput
-                  placeholder="Ürünün detaylı durumunu, ebatlarını, malzemesini yazın..."
-                  placeholderTextColor={theme.textSecondary}
-                  multiline
-                  numberOfLines={4}
-                  value={description}
-                  onChangeText={setDescription}
-                  onFocus={() => setFocusedInput('desc')}
-                  onBlur={() => setFocusedInput(null)}
-                  style={[
-                    styles.textAreaInput,
-                    {
-                      color: theme.text,
-                      backgroundColor: inputBg,
-                      borderColor: focusedInput === 'desc' ? inputBorderFocused : inputBorder,
-                      borderWidth: focusedInput === 'desc' ? 1.5 : 1,
-                    }
-                  ]}
-                />
-              </View>
-
-              {/* Media Section */}
-              <View style={styles.inputGroup}>
-                <Text style={[styles.inputLabel, { color: theme.text }]}>Medya Yükleme</Text>
-                
-                {/* Video Picker */}
-                <Text style={[styles.subLabel, { color: theme.textSecondary }]}>Ürün Tanıtım Videosu * (Maks 8 sn, Dikey format)</Text>
-                {videoUri ? (
-                  <View style={[styles.mediaPreviewCard, { backgroundColor: inputBg, borderColor: inputBorder }]}>
-                    <FileText size={24} color={theme.gold} />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={[styles.mediaFileName, { color: theme.text }]} numberOfLines={1}>Video Hazır (Sıkıştırıldı)</Text>
-                      <Text style={{ color: theme.textSecondary, fontSize: 11 }}>Dikey format • Süre uygun</Text>
-                    </View>
-                    <Pressable onPress={removeVideo} style={styles.mediaDeleteBtn}>
-                      <X size={16} color="#EF4444" />
-                    </Pressable>
-                  </View>
-                ) : isCompressing ? (
-                  <View style={[styles.mediaPlaceholder, { borderColor: theme.gold, backgroundColor: inputBg }]}>
-                    <ActivityIndicator size="small" color={theme.gold} />
-                    <Text style={[styles.placeholderText, { color: theme.text, marginLeft: 8 }]}>
-                      Video sıkıştırılıyor (%{compressionProgress})...
-                    </Text>
-                  </View>
-                ) : (
-                  <Pressable
-                    style={[styles.mediaPlaceholder, { borderColor: inputBorder, backgroundColor: inputBg }]}
-                    onPress={pickVideo}
-                  >
-                    <Play size={20} color={theme.textSecondary} />
-                    <Text style={[styles.placeholderText, { color: theme.textSecondary }]}>
-                      Dikey Video Seç (Maks 8 sn)
-                    </Text>
-                  </Pressable>
-                )}
-
-                {/* Photos Picker */}
-                <Text style={[styles.subLabel, { color: theme.textSecondary, marginTop: 8 }]}>
-                  Ürün Fotoğrafları * (En az 3, En fazla 10 adet)
-                </Text>
-                
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photosScroll}>
-                  {photosUris.map((uri, idx) => (
-                    <View key={idx} style={styles.photoThumbWrapper}>
-                      <Image source={{ uri }} style={styles.photoThumb} />
-                      <Pressable onPress={() => removePhoto(idx)} style={styles.photoDeleteBtn}>
-                        <X size={10} color="#FFFFFF" />
-                      </Pressable>
-                    </View>
-                  ))}
-                  {photosUris.length < 10 && (
-                    <Pressable
-                      style={[styles.photoAddPlaceholder, { borderColor: inputBorder, backgroundColor: inputBg }]}
-                      onPress={pickPhotos}
-                    >
-                      <Plus size={20} color={theme.textSecondary} />
-                      <Text style={{ color: theme.textSecondary, fontSize: 10, marginTop: 4 }}>
-                        {photosUris.length}/10
-                      </Text>
-                    </Pressable>
-                  )}
-                </ScrollView>
-              </View>
 
               {/* Sales Type selector */}
               {rentSellSelection !== 'kirala' && (
@@ -2120,7 +2541,7 @@ export default function CreateListingScreen() {
                         styles.typeOption,
                         {
                           backgroundColor: type === 'fixed' 
-                            ? (isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)')
+                            ? (isDark ? 'rgba(9, 105, 218, 0.12)' : 'rgba(9, 105, 218, 0.08)')
                             : inputBg,
                           borderColor: type === 'fixed' ? theme.gold : inputBorder,
                           borderWidth: type === 'fixed' ? 1.5 : 1,
@@ -2146,7 +2567,7 @@ export default function CreateListingScreen() {
                         styles.typeOption,
                         {
                           backgroundColor: type === 'offer' 
-                            ? (isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)')
+                            ? (isDark ? 'rgba(9, 105, 218, 0.12)' : 'rgba(9, 105, 218, 0.08)')
                             : inputBg,
                           borderColor: type === 'offer' ? theme.gold : inputBorder,
                           borderWidth: type === 'offer' ? 1.5 : 1,
@@ -2172,7 +2593,7 @@ export default function CreateListingScreen() {
                         styles.typeOption,
                         {
                           backgroundColor: type === 'auction' 
-                            ? (isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)')
+                            ? (isDark ? 'rgba(9, 105, 218, 0.12)' : 'rgba(9, 105, 218, 0.08)')
                             : inputBg,
                           borderColor: type === 'auction' ? theme.gold : inputBorder,
                           borderWidth: type === 'auction' ? 1.5 : 1,
@@ -2199,7 +2620,7 @@ export default function CreateListingScreen() {
                           styles.typeOption,
                           {
                             backgroundColor: type === 'rent' 
-                              ? (isDark ? 'rgba(255, 107, 0, 0.12)' : 'rgba(255, 107, 0, 0.08)')
+                              ? (isDark ? 'rgba(9, 105, 218, 0.12)' : 'rgba(9, 105, 218, 0.08)')
                               : inputBg,
                             borderColor: type === 'rent' ? theme.gold : inputBorder,
                             borderWidth: type === 'rent' ? 1.5 : 1,
@@ -2268,7 +2689,7 @@ export default function CreateListingScreen() {
                               styles.cityBadge,
                               { 
                                 flex: 1, 
-                                backgroundColor: rentPeriod === period ? 'rgba(255, 107, 0, 0.15)' : inputBg,
+                                backgroundColor: rentPeriod === period ? 'rgba(9, 105, 218, 0.15)' : inputBg,
                                 borderColor: rentPeriod === period ? theme.gold : inputBorder,
                                 borderWidth: rentPeriod === period ? 1.5 : 1,
                                 height: 42,
@@ -2288,6 +2709,34 @@ export default function CreateListingScreen() {
                           </Pressable>
                         ))}
                       </View>
+                    </View>
+                  )}
+                  {/* Stock (Stok Adedi) Input */}
+                  {true && (
+                    <View style={styles.inputGroup}>
+                      <Text style={[styles.inputLabel, { color: theme.text }]}>Stok Adedi *</Text>
+                      <TextInput
+                        placeholder="Örn: 5"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={stock}
+                        onChangeText={setStock}
+                        onFocus={() => setFocusedInput('stock')}
+                        onBlur={() => setFocusedInput(null)}
+                        style={[
+                          styles.textInput,
+                          {
+                            color: theme.text,
+                            backgroundColor: inputBg,
+                            borderColor: focusedInput === 'stock' ? inputBorderFocused : inputBorder,
+                            borderWidth: focusedInput === 'stock' ? 1.5 : 1,
+                            height: 44,
+                          }
+                        ]}
+                      />
+                      <Text style={{ fontSize: 10, color: theme.textSecondary, marginTop: 4 }}>
+                        Ürününüzün stokta kaç adet olduğunu girin. Stok tükendiğinde ürün otomatik olarak yayından kaldırılır.
+                      </Text>
                     </View>
                   )}
                 </>
@@ -2368,6 +2817,32 @@ export default function CreateListingScreen() {
                         }
                       ]}
                     />
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={[styles.inputLabel, { color: theme.text }]}>Minimum Teklif Artış Tutarı *</Text>
+                    <View style={styles.priceInputWrapper}>
+                      <TextInput
+                        placeholder="Örn: 10"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="numeric"
+                        value={minIncrement}
+                        onChangeText={setMinIncrement}
+                        onFocus={() => setFocusedInput('minIncrement')}
+                        onBlur={() => setFocusedInput(null)}
+                        style={[
+                          styles.textInput,
+                          {
+                            color: theme.text,
+                            backgroundColor: inputBg,
+                            borderColor: focusedInput === 'minIncrement' ? inputBorderFocused : inputBorder,
+                            borderWidth: focusedInput === 'minIncrement' ? 1.5 : 1,
+                            paddingRight: 40,
+                          }
+                        ]}
+                      />
+                      <Text style={[styles.priceCurrency, { color: isDark ? theme.gold : theme.goldAccent }]}>TL</Text>
+                    </View>
                   </View>
                 </>
               )}
@@ -2524,15 +2999,24 @@ export default function CreateListingScreen() {
                 style={({ pressed }) => [
                   styles.submitButton, 
                   { 
-                    backgroundColor: theme.gold,
-                    opacity: pressed ? 0.9 : 1,
+                    backgroundColor: isUploading ? '#CBD5E1' : theme.gold,
+                    opacity: (pressed || isUploading) ? 0.9 : 1,
                     transform: [{ scale: pressed ? 0.98 : 1 }]
                   }
                 ]} 
+                disabled={isUploading}
                 onPress={handleCreateListing}
               >
-                <Plus size={18} color="#FFFFFF" strokeWidth={2.5} />
-                <Text style={styles.submitText}>İlanı Yayınla</Text>
+                {isUploading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 6 }} />
+                ) : editId ? (
+                  <CheckCircle2 size={18} color="#FFFFFF" strokeWidth={2.5} />
+                ) : (
+                  <Plus size={18} color="#FFFFFF" strokeWidth={2.5} />
+                )}
+                <Text style={styles.submitText}>
+                  {isUploading ? 'Görseller Yükleniyor...' : (editId ? 'Değişiklikleri Kaydet' : 'İlanı Yayınla')}
+                </Text>
               </Pressable>
             </View>
           )}
@@ -2550,6 +3034,18 @@ export default function CreateListingScreen() {
             ? FLEA_MARKET_CATEGORIES
             : creationMode === 'producer'
             ? PRODUCER_CATEGORIES
+            : creationMode === 'auction'
+            ? RENTAL_SUB_CATEGORIES.filter(cat => 
+                !cat.includes('🏠') && 
+                !cat.includes('🚗') && 
+                !cat.includes('🏍️') && 
+                !cat.includes('🚐') && 
+                !cat.includes('🚛') && 
+                !cat.includes('🚜') && 
+                !cat.includes('🚧') && 
+                !cat.includes('🛥️') && 
+                !cat.includes('🚲')
+              ).concat(['🔍 Diğer'])
             : RENTAL_SUB_CATEGORIES
         }
         selectedValue={category}
@@ -2922,22 +3418,26 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 16,
     paddingTop: 10,
-    justifyContent: 'space-between',
+    justifyContent: Platform.OS === 'web' ? 'center' : 'space-between',
+    alignSelf: Platform.OS === 'web' ? 'center' : 'stretch',
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 600 : undefined,
   },
   gridCard: {
-    width: '47%',
-    borderRadius: 12,
+    width: Platform.OS === 'web' ? '45%' : '47%',
+    maxWidth: Platform.OS === 'web' ? 280 : undefined,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 16,
+    padding: Platform.OS === 'web' ? 24 : 16,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    minHeight: 150,
+    gap: 12,
+    minHeight: Platform.OS === 'web' ? 180 : 150,
   },
   gridIconContainer: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: Platform.OS === 'web' ? 72 : 52,
+    height: Platform.OS === 'web' ? 72 : 52,
+    borderRadius: Platform.OS === 'web' ? 36 : 26,
     alignItems: 'center',
     justifyContent: 'center',
   },

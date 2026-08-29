@@ -79,7 +79,7 @@ export default function ChatListScreen() {
     <ThemedView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.logoRow}>
-          <MessageSquare size={22} color="#FF6B00" />
+          <MessageSquare size={22} color="#0969da" />
           <ThemedText style={styles.headerTitle}>SOHBETLERİM</ThemedText>
         </View>
         <ThemedText style={styles.headerSubtitle}>
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     borderWidth: 1.5,
-    borderColor: '#FF6B00',
+    borderColor: '#0969da',
   },
   chatInfo: {
     flex: 1,
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
   },
   listingTitle: {
     fontSize: 11,
-    color: '#FF6B00',
+    color: '#0969da',
   },
   lastMessage: {
     fontSize: 12,

@@ -14,7 +14,7 @@ import {
   Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useAppStore, Message } from '@/services/store';
+import { useAppStore, Message, getListingSeoUrl } from '@/services/store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -291,7 +291,14 @@ export default function ChatDetailScreen() {
         <View style={styles.headerTitleContainer}>
           <ThemedText style={styles.headerName}>{chat.otherPartyName}</ThemedText>
           {!chat.fromSellerProfile && (
-            <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
+            <Pressable onPress={() => {
+              const listing = listings.find(l => l.id === chat.listingId);
+              if (listing) {
+                router.push(getListingSeoUrl(listing));
+              } else {
+                router.push(`/product/${chat.listingId}`);
+              }
+            }}>
               <ThemedText style={styles.headerListing} numberOfLines={1}>
                 İlan: {chat.listingTitle}
               </ThemedText>
@@ -300,7 +307,14 @@ export default function ChatDetailScreen() {
         </View>
 
         {!chat.fromSellerProfile && (
-          <Pressable onPress={() => router.push(`/product/${chat.listingId}`)}>
+          <Pressable onPress={() => {
+            const listing = listings.find(l => l.id === chat.listingId);
+            if (listing) {
+              router.push(getListingSeoUrl(listing));
+            } else {
+              router.push(`/product/${chat.listingId}`);
+            }
+          }}>
             <Image source={typeof chat.listingImage === 'number' ? chat.listingImage : { uri: chat.listingImage }} style={styles.headerListingThumb} />
           </Pressable>
         )}
@@ -665,17 +679,17 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   modalContent: {
     width: '100%',
     maxWidth: 500,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 12,
     padding: 24,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(212, 175, 55, 0.3)',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.3)',
   },
   modalHeader: {
     flexDirection: 'row',

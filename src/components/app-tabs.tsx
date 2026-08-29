@@ -16,7 +16,7 @@ import GlobalCartModal from '@/components/global-cart-modal';
 import GlobalAuthModal from '@/components/global-auth-modal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const VISIBLE_TAB_NAMES = ['index', 'auctions', 'create', 'chat', 'profile'];
+const VISIBLE_TAB_NAMES = ['index', 'create', 'auctions'];
 
 // SVG viewBox: 375 x 80
 // Path notch: sol 130px, sağ 245px, merkez 187.5px, notch derinliği 24px
@@ -141,7 +141,7 @@ function CustomTabBar({ state, navigation }: any) {
             left: width / 2 - 37.5, // Center it horizontally (75 / 2 = 37.5)
             zIndex: 20,
           },
-          Platform.OS === 'ios' ? { shadowColor: '#FF6B00' } : {}
+          Platform.OS === 'ios' ? { shadowColor: '#0969da' } : {}
         ]}
         android_ripple={{ color: 'rgba(255,255,255,0.25)', radius: 34 }}
       >
@@ -162,13 +162,17 @@ export default function AppTabs() {
         screenOptions={{ headerShown: false }}
       >
         <Tabs.Screen name="index" options={{ title: 'Ana Sayfa' }} />
-        <Tabs.Screen name="auctions" options={{ title: 'Reels' }} />
         <Tabs.Screen name="create" options={{ title: '', headerShown: false }} />
+        <Tabs.Screen name="auctions" options={{ title: 'Reels' }} />
         <Tabs.Screen name="chat" options={{ title: 'Sohbet' }} />
         <Tabs.Screen name="profile" options={{ title: 'Profil' }} />
         <Tabs.Screen name="product/[id]" options={{ href: null, headerShown: false }} />
         <Tabs.Screen name="chat/[id]" options={{ href: null, headerShown: false }} />
         <Tabs.Screen name="featured-auction" options={{ href: null, headerShown: false }} />
+        <Tabs.Screen name="designs" options={{ href: null, headerShown: false }} />
+        <Tabs.Screen name="orders" options={{ href: null, headerShown: false }} />
+        <Tabs.Screen name="my-auctions" options={{ href: null, headerShown: false }} />
+        <Tabs.Screen name="my-listings" options={{ href: null, headerShown: false }} />
       </Tabs>
       <GlobalCartModal />
       <GlobalAuthModal />
@@ -191,7 +195,7 @@ const styles = StyleSheet.create({
     width: 75,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#FF6B00',
+    backgroundColor: '#0969da',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
