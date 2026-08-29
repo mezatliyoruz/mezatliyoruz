@@ -3591,7 +3591,7 @@ export default function ProfileScreen() {
                   style={[styles.listingItem, { backgroundColor: itemBg, borderColor: itemBorder }]}
                   onPress={() => {
                     console.log('[DEBUG] Navigating to product:', item.id);
-                    router.push(getListingSeoUrl(item) as any);
+                    router.push(`/product/${item.id}` as any);
                   }}
                 >
                   <Image
