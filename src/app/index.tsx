@@ -339,6 +339,14 @@ export default function HomeScreen() {
   const [selectedSubCategory, setSelectedSubCategory] = useState<string | null>(null);
   const [activeReelsIndex, setActiveReelsIndex] = useState<number | null>(null);
   const [visibleReelsLimit, setVisibleReelsLimit] = useState(15);
+  const [lazyRenderAll, setLazyRenderAll] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setLazyRenderAll(true);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     setVisibleReelsLimit(15);
@@ -1152,12 +1160,20 @@ export default function HomeScreen() {
   const col2: { item: Listing; globalIndex: number }[] = [];
   const col3: { item: Listing; globalIndex: number }[] = [];
 
-  mixedDisplayedReelsProducts.forEach((item, index) => {
+  const visibleReels = lazyRenderAll 
+    ? mixedDisplayedReelsProducts 
+    : mixedDisplayedReelsProducts.slice(0, 3);
+
+  visibleReels.forEach((item, index) => {
     const packet = { item, globalIndex: index };
     if (index % 3 === 0) col1.push(packet);
     else if (index % 3 === 1) col2.push(packet);
     else col3.push(packet);
   });
+
+  const desktopVisibleReels = lazyRenderAll
+    ? mixedDisplayedReelsProducts
+    : mixedDisplayedReelsProducts.slice(0, 4);
 
   const handleApplyReelsFilters = () => {
     setReelsFiltersVisible(false);
@@ -2339,6 +2355,9 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false} 
         contentContainerStyle={styles.scrollContent}
         onScroll={({ nativeEvent }) => {
+          if (nativeEvent.contentOffset.y > 10 && !lazyRenderAll) {
+            setLazyRenderAll(true);
+          }
           if (isCloseToBottom(nativeEvent)) {
             loadMoreReels();
           }
@@ -2710,7 +2729,7 @@ export default function HomeScreen() {
           ) : (
             isDesktop ? (
               <View style={styles.desktopGrid}>
-                {mixedDisplayedReelsProducts.map((item, idx) => renderDesktopReelsCard(item, idx))}
+                {desktopVisibleReels.map((item, idx) => renderDesktopReelsCard(item, idx))}
               </View>
             ) : (
               <View style={styles.masonryGrid}>
