@@ -569,7 +569,13 @@ export default function MyListingsScreen() {
             </View>
           ) : (
             currentTabListings.map((listing) => (
-              <View key={listing.id} style={[styles.listingCard, { backgroundColor: (theme as any).backgroundElement || theme.background, borderColor: theme.backgroundSelected }]}>
+              <Pressable
+                key={listing.id}
+                style={[styles.listingCard, { backgroundColor: (theme as any).backgroundElement || theme.background, borderColor: theme.backgroundSelected }]}
+                onPress={() => {
+                  router.push(`/product/${listing.id}` as any);
+                }}
+              >
                 <View style={{ flexDirection: 'row', gap: 12 }}>
                   {listing.photos && listing.photos[0] ? (
                     <Image
@@ -719,7 +725,7 @@ export default function MyListingsScreen() {
                     </View>
                   </View>
                 </View>
-              </View>
+              </Pressable>
             ))
           )
         )}

@@ -154,7 +154,7 @@ export default function MyAuctionsScreen() {
               <Pressable 
                 key={listing.id} 
                 style={[styles.auctionCard, { backgroundColor: theme.backgroundElement || theme.background, borderColor: theme.backgroundSelected }]}
-                onPress={() => router.push(getListingSeoUrl(listing))}
+                onPress={() => router.push(`/product/${listing.id}` as any)}
               >
                 <View style={{ flexDirection: 'row', gap: 12 }}>
                   <Image 
