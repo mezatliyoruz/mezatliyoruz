@@ -855,16 +855,25 @@ export default function ProductDetailScreen() {
               <ThemedView type="backgroundElement" style={styles.documentBox}>
                 <View style={styles.documentHead}>
                   <BookOpen size={18} color={theme.gold} />
-                  <ThemedText style={styles.documentTitle}>Belgeli Ürün (Orijinallik Onaylı)</ThemedText>
+                  <ThemedText style={styles.documentTitle}>Belgeli Ürün</ThemedText>
                 </View>
                 <ThemedText style={styles.documentDesc}>
-                  Bu ürünün sertifika, ekspertiz raporu veya faturası satıcı tarafından yüklenmiştir.
+                  Bu ürünün sertifika, ekspertiz raporu veya faturası satıcı tarafından yüklenmiştir. Belgelerin kontrolü ve doğruluğu tamamen alıcının sorumluluğundadır.
                 </ThemedText>
                 <View style={styles.documentLinkRow}>
                   <ThemedText style={styles.documentFileName} numberOfLines={1}>
                     📄 {listing.documentUrl || 'sertifika.pdf'}
                   </ThemedText>
-                  <Pressable style={styles.previewBtn} onPress={() => alert('Sertifika belgesi güvenli şekilde doğrulandı (Mock Raporu).')}>
+                  <Pressable 
+                    style={styles.previewBtn} 
+                    onPress={() => {
+                      if (Platform.OS === 'web') {
+                        alert('Belge açılıyor. Belgelerin kontrolü ve doğruluğu tamamen alıcının sorumluluğundadır.');
+                      } else {
+                        Alert.alert('Bilgi', 'Belge açılıyor. Belgelerin kontrolü ve doğruluğu tamamen alıcının sorumluluğundadır.');
+                      }
+                    }}
+                  >
                     <ThemedText style={styles.previewBtnText}>Görüntüle</ThemedText>
                     <ArrowRight size={12} color="#FFFFFF" />
                   </Pressable>
