@@ -25,7 +25,7 @@ export default function OrdersScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = width > 768;
 
-  const { currentUser, orders, updateOrderStatus, addReview, reportIssue } = useAppStore();
+  const { currentUser, orders, updateOrderStatus, addReview, reportIssue, listings, addOrder } = useAppStore();
   const [activeTab, setActiveTab] = useState<'bought' | 'sold'>('bought');
   const [trackingCodes, setTrackingCodes] = useState<{ [key: string]: string }>({});
 
@@ -147,7 +147,49 @@ export default function OrdersScreen() {
         {currentOrdersList.length === 0 ? (
           <View style={styles.emptyContainer}>
             <ShoppingBag size={48} color={theme.textSecondary} />
-            <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 12 }}>Henüz siparişiniz bulunmamaktadır.</Text>
+            <Text style={{ color: theme.textSecondary, fontSize: 14, marginTop: 12, marginBottom: 12 }}>Henüz siparişiniz bulunmamaktadır.</Text>
+            <Pressable
+              style={{
+                backgroundColor: theme.gold,
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                borderRadius: 6,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              onPress={() => {
+                const firstListing = listings[0] || {
+                  id: 'dummy-listing',
+                  title: 'Antika Gümüş Cep Saati',
+                  price: 3500,
+                  photos: ['https://images.unsplash.com/photo-1509048191080-d2984bad6ae5?w=600'],
+                  sellerName: 'Himmet Akar',
+                };
+                addOrder({
+                  buyerId: currentUser?.id || 'guest_buyer',
+                  buyerName: currentUser?.name || 'Test Kullanıcı',
+                  buyerPhone: currentUser?.phone || '05555555555',
+                  buyerAddress: 'Moda Cad. No:45 Kadıköy, İstanbul',
+                  sellerName: firstListing.sellerName || 'Himmet Akar',
+                  items: [{
+                    id: firstListing.id,
+                    listing: firstListing,
+                    quantity: 1
+                  }],
+                  totalAmount: firstListing.price,
+                  shippingCompany: 'Sürat Kargo',
+                  shippingFee: 65,
+                  trackingNumber: `GLV-${Math.floor(100000000 + Math.random() * 900000000)}`,
+                  senderName: firstListing.sellerName || 'Himmet Akar',
+                  senderPhone: '05455798600',
+                  senderAddress: 'Caferağa Mah. Moda Cad. No:45 Kadıköy, İstanbul',
+                  status: 'shipped',
+                });
+                Alert.alert('Başarılı', 'Kargo takibini denemeniz için örnek bir kargolu sipariş oluşturuldu!');
+              }}
+            >
+              <Text style={{ color: '#000000', fontWeight: 'bold', fontSize: 12 }}>⚡ Denemek İçin Test Siparişi Oluştur</Text>
+            </Pressable>
           </View>
         ) : (
           currentOrdersList.map((order) => (
